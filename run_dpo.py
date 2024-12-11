@@ -42,7 +42,7 @@ def train_sft():
         return {"text": text}
 
     print("Loading SFT dataset...")
-    dataset = load_dataset("mlabonne/FineTome-100k", split="train[:1000]")
+    dataset = load_dataset("Anthropic/hh-rlhf", split="train")
     dataset = dataset.map(apply_template, batched=True)
 
     trainer = SFTTrainer(
@@ -122,7 +122,7 @@ def train_ppo_custom(base_model, tokenizer):
     reward_model.eval()
 
     # Create dataset
-    dataset = load_dataset("Dahoas/rm-static", split="train[:1000]")
+    dataset = load_dataset("Anthropic/hh-rlhf", split="train")
     
     # Custom PPO step function
     def ppo_step(query, old_response, old_values, old_logprobs, rewards):
@@ -174,7 +174,7 @@ def train_ppo_custom(base_model, tokenizer):
                 
                 # Prepare inputs
                 inputs = tokenizer(
-                    batch['prompt'], 
+                    batch['chosen'], 
                     padding=True, 
                     truncation=True, 
                     max_length=config.max_length, 
@@ -189,14 +189,14 @@ def train_ppo_custom(base_model, tokenizer):
                     outputs = base_model.generate(
                         input_ids=inputs['input_ids'],
                         attention_mask=inputs['attention_mask'],
-                        max_new_tokens=config.batch_size,  # Set max_new_tokens to match batch_size
+                        max_new_tokens=config.batch_size,
                         do_sample=True,
                         temperature=config.temperature
                     )
                     initial_responses = tokenizer.batch_decode(outputs, skip_special_tokens=True)
                 
                 # Get rewards from reward model
-                reward_inputs = tokenizer(batch['prompt'], initial_responses, 
+                reward_inputs = tokenizer(batch['chosen'], initial_responses, 
                                        padding=True, 
                                        truncation=True, 
                                        max_length=config.max_length,
@@ -308,6 +308,9 @@ if __name__ == "__main__":
     sft_model, tokenizer = train_sft()
 
     final_model = train_ppo_custom(sft_model, tokenizer)
+
+    # Test the final model
+    test_model(sft_model, final_model, tokenizer)
 
     # Test the final model
     test_model(sft_model, final_model, tokenizer)
