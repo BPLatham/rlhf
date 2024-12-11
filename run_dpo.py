@@ -146,33 +146,8 @@ def train_ppo(base_model, tokenizer):
 
     # Start by setting up all models
     print("Setting up models...")
-    # Extract the underlying model to avoid PEFT wrapping issues
-    if hasattr(base_model, "base_model"):
-        if hasattr(base_model.base_model, "model"):
-            policy = base_model.base_model.model
-        else:
-            policy = base_model.base_model
-    else:
-        policy = base_model
+    policy = base_model
     policy.train()
-
-    # Override the dropout disabling function to handle None
-    import trl.trainer.utils
-    original_disable_dropout = trl.trainer.utils.disable_dropout_in_model
-    
-    def safe_disable_dropout(model):
-        if model is None:
-            return
-        if not hasattr(model, 'modules'):
-            if hasattr(model, 'module'):
-                model = model.module
-            else:
-                return
-        for module in model.modules():
-            if isinstance(module, torch.nn.Dropout):
-                module.p = 0.0
-    
-    trl.trainer.utils.disable_dropout_in_model = safe_disable_dropout
 
     # Create reward model
     print("Loading reward model...")
@@ -191,15 +166,30 @@ def train_ppo(base_model, tokenizer):
 
     print("\nModel check before PPOTrainer:")
     print(f"Policy type: {type(policy)}")
-    print(f"Policy modules available: {list(policy.named_modules())[:5]}")  # Print first 5 modules for debugging
     print(f"Reward model type: {type(reward_model)}")
     
     print("\nInitializing PPO trainer...")
     try:
+        # Get the original PPOTrainer class, not Unsloth's wrapped version
+        from trl.trainer import PPOTrainer as OriginalPPOTrainer
+        
+        # Create value head
+        class ValueHead(torch.nn.Module):
+            def __init__(self, hidden_size=4096):
+                super().__init__()
+                self.v_head = torch.nn.Linear(hidden_size, 1)
+                self.v_head.to(policy.device)
+
+            def forward(self, hidden_states, *args, **kwargs):
+                return self.v_head(hidden_states)
+
+        value_model = ValueHead()
+        
         # Initialize trainer with minimal components
-        ppo_trainer = PPOTrainer(
+        ppo_trainer = OriginalPPOTrainer(
             config=ppo_config,
             policy=policy,
+            value_model=value_model,  # Pass value model explicitly
             ref_policy=None,
             tokenizer=tokenizer,
             train_dataset=dataset,
@@ -209,19 +199,13 @@ def train_ppo(base_model, tokenizer):
         print("Starting PPO training...")
         ppo_trainer.train()
         print("PPO Training completed!")
-        
-        # Restore original function
-        trl.trainer.utils.disable_dropout_in_model = original_disable_dropout
-        return base_model
+        return policy
 
     except Exception as e:
         print(f"\nError during PPO training setup: {e}")
         print("\nFull traceback:")
         import traceback
         print(traceback.format_exc())
-        
-        # Restore original function even on error
-        trl.trainer.utils.disable_dropout_in_model = original_disable_dropout
         return base_model
         
 def test_model(base, model, tokenizer):
