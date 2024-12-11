@@ -141,8 +141,7 @@ def train_ppo(base_model, tokenizer):
         gradient_accumulation_steps=1,
         save_strategy="epoch",
         logging_steps=10,
-        optim="adamw_8bit",
-        use_peft=True  # Add this to handle PEFT models
+        optim="adamw_8bit"
     )
 
     # Start by setting up all models
