@@ -148,12 +148,6 @@ def train_ppo(base_model, tokenizer):
     policy = base_model
     policy.train()
 
-    # Get the underlying model
-    if hasattr(policy, 'get_base_model'):
-        actual_model = policy.get_base_model()
-    else:
-        actual_model = policy
-
     # Create reward model
     print("\nLoading reward model...")
     reward_model = AutoModelForSequenceClassification.from_pretrained(
@@ -168,31 +162,23 @@ def train_ppo(base_model, tokenizer):
     print("\nPreparing dataset...")
     dataset = load_dataset("Dahoas/rm-static", split="train[:1000]")
 
-    # Monkey patch the disable_dropout_in_model function
-    def safe_disable_dropout(model):
-        if model is None:
-            print("Warning: Trying to disable dropout on None model")
-            return
-        if not hasattr(model, 'modules'):
-            print(f"Warning: Model {type(model)} has no modules method")
-            return
-        for module in model.modules():
-            if isinstance(module, torch.nn.Dropout):
-                module.p = 0.0
-
-    # Replace the original function
-    import trl.trainer.utils
-    trl.trainer.utils.disable_dropout_in_model = safe_disable_dropout
-
     try:
         print("\nInitializing PPO trainer...")
-        ppo_trainer = PPOTrainer(
+        # Debug the modules being passed
+        print("Policy modules available:", [n for n, _ in policy.named_modules()])
+        print("Reward model modules available:", [n for n, _ in reward_model.named_modules()])
+        
+        # Try to initialize with explicit module passing
+        from unsloth.trainer import PPOTrainer as UnslothPPOTrainer
+        
+        ppo_trainer = UnslothPPOTrainer(
             config=ppo_config,
-            policy=actual_model,  # Use the actual base model
+            policy=policy.base_model.model,  # Get the actual underlying model
             ref_policy=None,
             tokenizer=tokenizer,
             train_dataset=dataset,
-            reward_model=reward_model
+            reward_model=reward_model,
+            model_init_kwargs={"peft_config": policy.peft_config}  # Pass PEFT config
         )
 
         print("Starting PPO training...")
@@ -205,6 +191,14 @@ def train_ppo(base_model, tokenizer):
         print("\nFull traceback:")
         import traceback
         print(traceback.format_exc())
+        
+        # Add more debugging info
+        print("\nPolicy information:")
+        print("Type:", type(policy))
+        if hasattr(policy, 'base_model'):
+            print("Base model type:", type(policy.base_model))
+            if hasattr(policy.base_model, 'model'):
+                print("Actual model type:", type(policy.base_model.model))
         return base_model
         
 def test_model(base, model, tokenizer):
