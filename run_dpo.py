@@ -42,27 +42,12 @@ def train_sft():
 
     def apply_template(examples):
         try:
-            # Check if the fields are strings or lists
-            if isinstance(examples["chosen"], str) and isinstance(examples["rejected"], str):
-                chosen_messages = [{"from": "human", "value": examples["chosen"]}]
-                rejected_messages = [{"from": "human", "value": examples["rejected"]}]
-            elif isinstance(examples["chosen"], list) and isinstance(examples["rejected"], list):
-                chosen_messages = [{"from": "human", "value": chosen} for chosen in examples["chosen"]]
-                rejected_messages = [{"from": "human", "value": rejected} for rejected in examples["rejected"]]
-            else:
-                raise ValueError("Invalid structure for examples: expected 'chosen' and 'rejected' to be strings or lists.")
+            # Process strings directly
+            chosen_text = [f"Human: {examples['chosen']}\nAssistant: " if "chosen" in examples else ""]
+            rejected_text = [f"Human: {examples['rejected']}\nAssistant: " if "rejected" in examples else ""]
 
-            print("Sample chosen message:", chosen_messages[0] if chosen_messages else "No messages")
-            print("Sample rejected message:", rejected_messages[0] if rejected_messages else "No messages")
-
-            chosen_text = [
-                tokenizer.apply_chat_template(message, tokenize=False, add_generation_prompt=False)
-                for message in chosen_messages
-            ]
-            rejected_text = [
-                tokenizer.apply_chat_template(message, tokenize=False, add_generation_prompt=False)
-                for message in rejected_messages
-            ]
+            print("Sample chosen_text:", chosen_text[0] if chosen_text else "No chosen text")
+            print("Sample rejected_text:", rejected_text[0] if rejected_text else "No rejected text")
 
             return {"chosen_text": chosen_text, "rejected_text": rejected_text}
 
