@@ -89,7 +89,7 @@ def train_dynamic_dpo(base_model, tokenizer, num_iterations=50):
     def generate_prompt():
         inference_model = FastLanguageModel.for_inference(base_model)
         
-        prompt_request = "Generate an interesting question or prompt that would test an AI's capabilities and knowledge."
+        prompt_request = "Pretend you are a human using a language model and generate an interesting question or prompt that would test an AI's capabilities and knowledge. Output no other text but the prompt for the AI."
         messages = [{"from": "human", "value": prompt_request}]
         inputs = tokenizer.apply_chat_template(
             messages,
