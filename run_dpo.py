@@ -38,8 +38,12 @@ def train_sft():
 
     def apply_template(examples):
         try:
-            chosen_messages = [{"from": "human", "value": chosen} for chosen in examples["chosen"]]
-            rejected_messages = [{"from": "human", "value": rejected} for rejected in examples["rejected"]]
+            # Validate and handle plain strings
+            if isinstance(examples["chosen"], list) and isinstance(examples["rejected"], list):
+                chosen_messages = [{"from": "human", "value": chosen} for chosen in examples["chosen"]]
+                rejected_messages = [{"from": "human", "value": rejected} for rejected in examples["rejected"]]
+            else:
+                raise ValueError("Invalid structure for examples: expected 'chosen' and 'rejected' to be lists.")
 
             print("Sample chosen message:", chosen_messages[0] if chosen_messages else "No messages")
             print("Sample rejected message:", rejected_messages[0] if rejected_messages else "No messages")
@@ -55,12 +59,8 @@ def train_sft():
 
             return {"chosen_text": chosen_text, "rejected_text": rejected_text}
 
-        except AttributeError as e:
-            print("AttributeError applying template. Likely incorrect input format:", e)
-            print("Failed example data:", examples)
-            raise
         except Exception as e:
-            print("General error applying template:", e)
+            print("Error applying template:", e)
             print("Failed example data:", examples)
             raise
 
@@ -72,6 +72,10 @@ def train_sft():
         dataset = dataset.map(apply_template, batched=True)
     except Exception as e:
         print("Error while mapping dataset:", e)
+        return None, None
+
+    if dataset is None:
+        print("Dataset mapping failed. Exiting.")
         return None, None
 
     trainer = SFTTrainer(
