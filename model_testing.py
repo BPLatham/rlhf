@@ -23,51 +23,52 @@ def test_model_generation():
         # Prepare the model for inference
         model = FastLanguageModel.for_inference(model)
 
-        # Prepare input
+        # Prompts to generate
         prompts = [
             "What is the meaning of life?",
             "Explain quantum physics in simple terms."
         ]
 
-        # Tokenize inputs
-        inputs = tokenizer(
-            prompts, 
-            padding=True,
-            truncation=True,
-            return_tensors="pt"
-        ).to("cuda")
-
-        print("\n--- Input Tensor Details ---")
-        for key, value in inputs.items():
-            print(f"{key} - Shape: {value.shape}, Dtype: {value.dtype}")
-
-        # Prepare text streamer for output
-        streamer = TextStreamer(tokenizer)
-
-        # Attempt generation with comprehensive parameters
+        # Generate responses one at a time
         print("\n--- Generating Responses ---")
-        try:
-            outputs = model.generate(
-                input_ids=inputs['input_ids'],
-                attention_mask=inputs['attention_mask'],
-                max_new_tokens=64,
-                do_sample=True,
-                temperature=0.7,
-                top_k=50,
-                top_p=0.95,
-                streamer=streamer
-            )
+        for prompt in prompts:
+            # Tokenize input
+            inputs = tokenizer(
+                prompt, 
+                return_tensors="pt", 
+                return_attention_mask=True
+            ).to("cuda")
 
-            # Decode and print responses
-            responses = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-            print("\nGenerated Responses:")
-            for i, response in enumerate(responses):
-                print(f"Prompt {i+1}: {response}")
+            print(f"\nPrompt: {prompt}")
+            print("Input Tensor Details:")
+            for key, value in inputs.items():
+                print(f"{key} - Shape: {value.shape}, Dtype: {value.dtype}")
 
-        except Exception as gen_error:
-            print(f"\nGeneration Error: {gen_error}")
-            import traceback
-            traceback.print_exc()
+            # Prepare text streamer for output
+            streamer = TextStreamer(tokenizer)
+
+            # Attempt generation with comprehensive parameters
+            try:
+                outputs = model.generate(
+                    input_ids=inputs['input_ids'],
+                    attention_mask=inputs['attention_mask'],
+                    max_new_tokens=64,
+                    do_sample=True,
+                    temperature=0.7,
+                    top_k=50,
+                    top_p=0.95,
+                    streamer=streamer
+                )
+
+                # Decode and print response
+                response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+                print("\nFull Response:")
+                print(response)
+
+            except Exception as gen_error:
+                print(f"\nGeneration Error: {gen_error}")
+                import traceback
+                traceback.print_exc()
 
     except Exception as load_error:
         print(f"\nModel Loading Error: {load_error}")
