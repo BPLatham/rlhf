@@ -148,10 +148,10 @@ def train_ppo(base_model, tokenizer):
     print("Setting up models...")
     policy = base_model  # Don't unwrap PEFT model
     policy.train()  # Ensure in training mode
-    
-    # Create reference model from the same architecture
+
+    # Create reference model by copying PEFT configuration
     print("Creating reference model...")
-    ref_policy = type(policy)(policy.config)
+    ref_policy = deepcopy(policy)  # Deep copy will preserve PEFT config
     ref_policy.eval()  # Set to evaluation mode
 
     # Create reward model
@@ -176,30 +176,10 @@ def train_ppo(base_model, tokenizer):
     
     print("\nInitializing PPO trainer...")
     try:
-        class ValueHead(torch.nn.Module):
-            """Custom value head for the PPO model"""
-            def __init__(self):
-                super().__init__()
-                self.v_head = torch.nn.Linear(policy.config.hidden_size, 1)
-                self.v_head = self.v_head.to(policy.device)
-
-            def forward(self, hidden_states, *args, **kwargs):
-                return self.v_head(hidden_states)
-
-            def modules(self):
-                return [self.v_head]
-
-        value_model = ValueHead()
-        
-        print("Value model structure:", value_model)
-        print("Value model device:", next(value_model.parameters()).device)
-
-        # Initialize trainer with minimal components
         ppo_trainer = PPOTrainer(
             config=ppo_config,
             policy=policy,
-            ref_policy=ref_policy,  # Add reference policy
-            value_model=value_model,
+            ref_policy=ref_policy,
             tokenizer=tokenizer,
             train_dataset=dataset,
             reward_model=reward_model
