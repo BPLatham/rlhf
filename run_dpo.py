@@ -55,8 +55,12 @@ def train_sft():
 
             return {"chosen_text": chosen_text, "rejected_text": rejected_text}
 
+        except AttributeError as e:
+            print("AttributeError applying template. Likely incorrect input format:", e)
+            print("Failed example data:", examples)
+            raise
         except Exception as e:
-            print("Error applying template:", e)
+            print("General error applying template:", e)
             print("Failed example data:", examples)
             raise
 
@@ -96,7 +100,12 @@ def train_sft():
     )
 
     print("Starting SFT training...")
-    # trainer.train()
+    try:
+        trainer.train()
+    except Exception as e:
+        print("Error during SFT training:", e)
+        return None, None
+
     print("SFT Training completed!")
     return model, tokenizer
 
