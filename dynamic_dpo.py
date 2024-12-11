@@ -158,7 +158,7 @@ def train_dynamic_dpo(base_model, tokenizer, num_iterations=50):
         preference_prompt = f"Prompt: {prompt}\nResponse 1: {response1}\nResponse 2: {response2}\n\nWhich response is better? Provide a preference score between 0 and 1 for each response."
         
         inputs = rlhf_tokenizer(preference_prompt, return_tensors="pt")
-        outputs = rlhf_model.generate(**inputs, max_length=600, num_return_sequences=1)
+        outputs = rlhf_model.generate(**inputs, max_new_tokens=100, num_return_sequences=1)
         
         preference_text = rlhf_tokenizer.decode(outputs[0], skip_special_tokens=True)
         preference_scores = extract_preference_scores(preference_text)
