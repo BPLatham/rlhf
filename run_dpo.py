@@ -37,15 +37,38 @@ def train_sft():
     )
 
     def apply_template(examples):
-        chosen_messages = [{"from": "human", "value": chosen} for chosen in examples["chosen"]]
-        rejected_messages = [{"from": "human", "value": rejected} for rejected in examples["rejected"]]
-        chosen_text = [tokenizer.apply_chat_template(message, tokenize=False, add_generation_prompt=False) for message in chosen_messages]
-        rejected_text = [tokenizer.apply_chat_template(message, tokenize=False, add_generation_prompt=False) for message in rejected_messages]
-        return {"chosen_text": chosen_text, "rejected_text": rejected_text}
+        try:
+            chosen_messages = [{"from": "human", "value": chosen} for chosen in examples["chosen"]]
+            rejected_messages = [{"from": "human", "value": rejected} for rejected in examples["rejected"]]
+
+            print("Sample chosen message:", chosen_messages[0] if chosen_messages else "No messages")
+            print("Sample rejected message:", rejected_messages[0] if rejected_messages else "No messages")
+
+            chosen_text = [
+                tokenizer.apply_chat_template(message, tokenize=False, add_generation_prompt=False)
+                for message in chosen_messages
+            ]
+            rejected_text = [
+                tokenizer.apply_chat_template(message, tokenize=False, add_generation_prompt=False)
+                for message in rejected_messages
+            ]
+
+            return {"chosen_text": chosen_text, "rejected_text": rejected_text}
+
+        except Exception as e:
+            print("Error applying template:", e)
+            print("Failed example data:", examples)
+            raise
 
     print("Loading SFT dataset...")
     dataset = load_dataset("Anthropic/hh-rlhf", split="train")
-    dataset = dataset.map(apply_template, batched=True)
+
+    print("Applying template to dataset...")
+    try:
+        dataset = dataset.map(apply_template, batched=True)
+    except Exception as e:
+        print("Error while mapping dataset:", e)
+        return None, None
 
     trainer = SFTTrainer(
         model=model,
