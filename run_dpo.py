@@ -123,33 +123,8 @@ from typing import Optional
 def train_ppo_custom(base_model, tokenizer):
     print("Starting Custom PPO Training...")
 
-    # Detailed debugging function
-    def print_tensor_details(inputs):
-        print("\n--- Tensor Diagnostics ---")
-        print("Input IDs shape:", inputs['input_ids'].shape)
-        print("Attention Mask shape:", inputs['attention_mask'].shape)
-        
-        try:
-            # Try to get position IDs
-            position_ids = torch.arange(
-                0, 
-                inputs['input_ids'].shape[1], 
-                dtype=torch.long, 
-                device=inputs['input_ids'].device
-            ).unsqueeze(0).repeat(inputs['input_ids'].shape[0], 1)
-            
-            print("Generated Position IDs shape:", position_ids.shape)
-        except Exception as e:
-            print("Could not generate position IDs:", e)
-
-        # Additional model-specific checks
-        try:
-            model_config = base_model.config if hasattr(base_model, 'config') else base_model.base_model.config
-            print("\nModel Configuration:")
-            print("Max Position Embeddings:", model_config.max_position_embeddings)
-            print("Model Dimensions:", model_config.hidden_size)
-        except Exception as e:
-            print("Could not retrieve model configuration:", e)
+    # Ensure proper inference mode with Unsloth
+    base_model = FastLanguageModel.for_inference(base_model)
 
     # Configuration
     class PPOConfigCustom:
@@ -158,7 +133,8 @@ def train_ppo_custom(base_model, tokenizer):
             self.batch_size = 2
             self.epochs = 1
             self.steps_per_epoch = 100
-            self.max_length = 64  # Reduced max length
+            self.max_length = 64  # Tokenization max length
+            self.generation_length = 128  # Generation max tokens
             self.kl_penalty = 0.1
             self.clip_epsilon = 0.2
             self.value_loss_coef = 0.1
@@ -229,7 +205,6 @@ def train_ppo_custom(base_model, tokenizer):
 
     # Training loop
     try:
-        base_model = FastLanguageModel.for_inference(base_model)
         base_model.train()
         optimizer = torch.optim.AdamW(base_model.parameters(), lr=config.learning_rate)
 
@@ -256,25 +231,30 @@ def train_ppo_custom(base_model, tokenizer):
                 
                 inputs = {k: v.to("cuda") for k, v in inputs.items()}
 
-                # Detailed tensor diagnostics
-                print_tensor_details(inputs)
-
-                # Custom generation with alternative approach
+                # Generation with refined parameters
                 with torch.no_grad():
                     try:
-                        # Try a more minimal generation approach
                         outputs = base_model.generate(
                             input_ids=inputs['input_ids'],
                             attention_mask=inputs['attention_mask'],
-                            max_new_tokens=16,
+                            max_new_tokens=config.generation_length,
                             do_sample=True,
-                            temperature=0.7
+                            temperature=0.7,
+                            top_k=50,
+                            top_p=0.95,
+                            repetition_penalty=1.1
                         )
-                        initial_responses = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+                        
+                        # Decode responses, removing original prompts
+                        initial_responses = [
+                            tokenizer.decode(output, skip_special_tokens=True)[len(prompt):].strip()
+                            for output, prompt in zip(outputs, batch['prompt'])
+                        ]
+
                     except Exception as gen_error:
                         print(f"Detailed Generation Error: {gen_error}")
-                        print("Full Generation Error Traceback:")
-                        print(traceback.format_exc())
+                        import traceback
+                        traceback.print_exc()
                         continue
 
                 # Get rewards from reward model
@@ -331,7 +311,8 @@ def train_ppo_custom(base_model, tokenizer):
     except Exception as e:
         print(f"\nError during PPO training: {e}")
         print("\nFull traceback:")
-        print(traceback.format_exc())
+        import traceback
+        traceback.print_exc()
         return None
 
 def test_model(base, model, tokenizer):
