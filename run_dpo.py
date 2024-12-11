@@ -200,6 +200,7 @@ def train_ppo_custom(base_model, tokenizer):
 
     # Training loop
     try:
+        base_model = FastLanguageModel.for_inference(base_model)
         base_model.train()
         optimizer = torch.optim.AdamW(base_model.parameters(), lr=config.learning_rate)
 
@@ -213,6 +214,7 @@ def train_ppo_custom(base_model, tokenizer):
                 inputs = tokenizer(
                     batch['prompt'],
                     padding=True,
+                    padding_side='left',
                     truncation=True,
                     max_length=config.max_length,
                     return_tensors="pt"
@@ -234,6 +236,7 @@ def train_ppo_custom(base_model, tokenizer):
                     batch['prompt'],
                     initial_responses,
                     padding=True,
+                    padding_side='left',
                     truncation=True,
                     max_length=config.max_length,
                     return_tensors="pt"
