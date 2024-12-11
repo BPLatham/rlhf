@@ -42,9 +42,9 @@ def train_sft():
 
     def apply_template(examples):
         try:
-            # Process strings directly
-            chosen_text = [f"Human: {examples['chosen']}\nAssistant: " if "chosen" in examples else ""]
-            rejected_text = [f"Human: {examples['rejected']}\nAssistant: " if "rejected" in examples else ""]
+            # Process each example in the batch
+            chosen_text = [f"Human: {chosen}\nAssistant: " for chosen in examples["chosen"]]
+            rejected_text = [f"Human: {rejected}\nAssistant: " for rejected in examples["rejected"]]
 
             print("Sample chosen_text:", chosen_text[0] if chosen_text else "No chosen text")
             print("Sample rejected_text:", rejected_text[0] if rejected_text else "No rejected text")
@@ -62,7 +62,7 @@ def train_sft():
     # Log the first few entries to inspect structure
     print("Sample data from dataset:")
     try:
-        print(dataset[0])
+        #print(dataset[0])
     except Exception as e:
         print("Error accessing dataset sample:", e)
         return None, None
