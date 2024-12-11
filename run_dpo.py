@@ -144,18 +144,33 @@ def train_ppo(base_model, tokenizer):
         optim="adamw_8bit"
     )
 
-    # Start by setting up all models
     print("Setting up models...")
-    policy = base_model  # Don't unwrap PEFT model
-    policy.train()  # Ensure in training mode
+    policy = base_model
+    
+    # Debug print to understand model structure
+    print("\nExamining policy model structure:")
+    print("Has modules method:", hasattr(policy, 'modules'))
+    print("Has base_model:", hasattr(policy, 'base_model'))
+    if hasattr(policy, 'base_model'):
+        print("Base model type:", type(policy.base_model))
+    
+    # Try to handle the modules issue
+    def get_modules(model):
+        if hasattr(model, 'modules'):
+            return model.modules()
+        elif hasattr(model, 'base_model'):
+            return model.base_model.modules()
+        elif hasattr(model, 'model'):
+            return model.model.modules()
+        else:
+            return []
 
-    # Create reference model by copying PEFT configuration
-    print("Creating reference model...")
-    ref_policy = deepcopy(policy)  # Deep copy will preserve PEFT config
-    ref_policy.eval()  # Set to evaluation mode
+    # Monkey patch the model if needed
+    if not hasattr(policy, 'modules'):
+        policy.modules = lambda: get_modules(policy)
 
     # Create reward model
-    print("Loading reward model...")
+    print("\nLoading reward model...")
     reward_model = AutoModelForSequenceClassification.from_pretrained(
         "lvwerra/distilbert-imdb",
         num_labels=2,
@@ -163,7 +178,6 @@ def train_ppo(base_model, tokenizer):
         torch_dtype=torch.float16
     ).cuda()
     reward_model.eval()
-    print("Successfully loaded reward model")
 
     # Create dataset
     print("\nPreparing dataset...")
@@ -171,15 +185,14 @@ def train_ppo(base_model, tokenizer):
 
     print("\nModel check before PPOTrainer:")
     print(f"Policy type: {type(policy)}")
-    print(f"Reference policy type: {type(ref_policy)}")
     print(f"Reward model type: {type(reward_model)}")
     
-    print("\nInitializing PPO trainer...")
     try:
+        # Try to initialize PPOTrainer
         ppo_trainer = PPOTrainer(
             config=ppo_config,
             policy=policy,
-            ref_policy=ref_policy,
+            ref_policy=None,
             tokenizer=tokenizer,
             train_dataset=dataset,
             reward_model=reward_model
@@ -195,6 +208,12 @@ def train_ppo(base_model, tokenizer):
         print("\nFull traceback:")
         import traceback
         print(traceback.format_exc())
+        
+        # Additional debugging info
+        print("\nModel structure investigation:")
+        for attr in dir(policy):
+            if not attr.startswith('_'):
+                print(f"Has {attr}:", hasattr(policy, attr))
         return base_model
         
 def test_model(base, model, tokenizer):
