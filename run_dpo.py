@@ -204,16 +204,20 @@ def train_ppo_custom(base_model, tokenizer):
         base_model.train()
         optimizer = torch.optim.AdamW(base_model.parameters(), lr=config.learning_rate)
 
+        # Convert base_model to inference mode
+        base_model = FastLanguageModel.for_inference(base_model)
+
         for epoch in range(config.epochs):
             print(f"\nEpoch {epoch + 1}/{config.epochs}")
 
             for step in range(config.steps_per_epoch):
                 batch = dataset[step * config.batch_size : (step + 1) * config.batch_size]
 
-                # Prepare inputs - remove token_type_ids
+                # Prepare inputs - set padding_side='left'
                 inputs = tokenizer(
                     batch['prompt'],
                     padding=True,
+                    padding_side='left',
                     truncation=True,
                     max_length=config.max_length,
                     return_tensors="pt"
@@ -237,6 +241,7 @@ def train_ppo_custom(base_model, tokenizer):
                 # Get rewards from reward model
                 reward_inputs = tokenizer(batch['prompt'], initial_responses,
                                          padding=True,
+                                         padding_side='left',
                                          truncation=True,
                                          max_length=config.max_length,
                                          return_tensors="pt")
