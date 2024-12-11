@@ -146,8 +146,12 @@ def train_ppo(base_model, tokenizer):
 
     # Start by setting up all models
     print("Setting up models...")
-    policy = base_model  # Don't unwrap PEFT model
-    policy.train()  # Ensure in training mode
+    # Explicitly get the underlying model
+    if hasattr(base_model, 'base_model'):
+        policy = base_model.base_model
+    else:
+        policy = base_model
+    policy.train()
 
     # Create reward model
     print("Loading reward model...")
@@ -164,6 +168,16 @@ def train_ppo(base_model, tokenizer):
     print("\nPreparing dataset...")
     dataset = load_dataset("Dahoas/rm-static", split="train[:1000]")
 
+    # Format dataset to match expected structure
+    def format_dataset(example):
+        return {
+            "input_ids": tokenizer(example["prompt"], truncation=True, max_length=512)["input_ids"],
+            "query": example["prompt"],
+            "response": example["chosen"]
+        }
+
+    formatted_dataset = dataset.map(format_dataset)
+
     print("\nModel check before PPOTrainer:")
     print(f"Policy type: {type(policy)}")
     print(f"Reward model type: {type(reward_model)}")
@@ -176,15 +190,14 @@ def train_ppo(base_model, tokenizer):
             policy=policy,
             ref_policy=None,
             tokenizer=tokenizer,
-            train_dataset=dataset,
-            reward_model=reward_model,
-            # Don't pass value_model - let PPOTrainer handle it internally
+            train_dataset=formatted_dataset,
+            reward_model=reward_model
         )
 
         print("Starting PPO training...")
         ppo_trainer.train()
         print("PPO Training completed!")
-        return policy
+        return base_model  # Return original PEFT model
 
     except Exception as e:
         print(f"\nError during PPO training setup: {e}")
@@ -192,7 +205,6 @@ def train_ppo(base_model, tokenizer):
         import traceback
         print(traceback.format_exc())
         return base_model
-
 
 def test_model(base, model, tokenizer):
     print("\nTesting the model...")
