@@ -172,7 +172,7 @@ def train_ppo_custom(base_model, tokenizer):
     
         # Align tensor shapes if needed
         if new_logprobs.shape != old_logprobs.shape:
-        new_logprobs = new_logprobs.view_as(old_logprobs)
+            new_logprobs = new_logprobs.view_as(old_logprobs)
     
         # Get new values
         hidden_states = outputs.hidden_states[-1]
