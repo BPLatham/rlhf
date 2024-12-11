@@ -136,6 +136,19 @@ def train_ppo_custom(base_model, tokenizer):
 
     config = PPOConfigCustom()
 
+    # Create value head
+    class ValueHead(torch.nn.Module):
+        def __init__(self, hidden_size=4096):
+            super().__init__()
+            self.v_head = torch.nn.Linear(hidden_size, 1)
+            self.v_head.to(base_model.device)
+
+        def forward(self, hidden_states):
+            return self.v_head(hidden_states)
+
+    value_model = ValueHead()
+    value_optimizer = torch.optim.AdamW(value_model.parameters(), lr=config.learning_rate)
+
     # Create reward model
     reward_model = AutoModelForSequenceClassification.from_pretrained(
         "lvwerra/distilbert-imdb",
@@ -147,6 +160,43 @@ def train_ppo_custom(base_model, tokenizer):
 
     # Create dataset
     dataset = load_dataset("Dahoas/rm-static", split="train[:1000]")
+
+    # Custom PPO step function
+    def ppo_step(query, old_response, old_values, old_logprobs, rewards):
+        # Forward pass
+        outputs = base_model(
+            query,
+            output_hidden_states=True,
+            return_dict=True
+        )
+
+        # Get new logprobs
+        logits = outputs.logits
+        new_logprobs = torch.nn.functional.log_softmax(logits, dim=-1)
+
+        # Get new values
+        hidden_states = outputs.hidden_states[-1]
+        new_values = value_model(hidden_states)
+
+        # Calculate advantages
+        advantages = rewards - old_values
+
+        # Calculate PPO policy loss
+        ratio = torch.exp(new_logprobs - old_logprobs)
+        surr1 = ratio * advantages
+        surr2 = torch.clamp(ratio, 1.0 - config.clip_epsilon, 1.0 + config.clip_epsilon) * advantages
+        policy_loss = -torch.min(surr1, surr2).mean()
+
+        # Calculate value loss
+        value_loss = torch.nn.functional.mse_loss(new_values, rewards + old_values)
+
+        # Calculate KL penalty
+        kl_div = (old_logprobs - new_logprobs).mean()
+
+        # Total loss
+        total_loss = policy_loss + config.value_loss_coef * value_loss + config.kl_penalty * kl_div
+
+        return total_loss, policy_loss, value_loss, kl_div
 
     # Training loop
     try:
@@ -193,10 +243,34 @@ def train_ppo_custom(base_model, tokenizer):
                     reward_outputs = reward_model(**reward_inputs)
                     rewards = reward_outputs.logits.softmax(dim=-1)[:, 1].detach()
 
-                # Log rewards
-                print(f"Step {step}: Rewards shape: {rewards.shape}")
+                # Get old values and logprobs
+                with torch.no_grad():
+                    old_outputs = base_model(**inputs, output_hidden_states=True)
+                    old_values = value_model(old_outputs.hidden_states[-1])
+                    old_logprobs = torch.nn.functional.log_softmax(old_outputs.logits, dim=-1)
 
-        print("PPO Training completed!")
+                # PPO update
+                loss, policy_loss, value_loss, kl_div = ppo_step(
+                    inputs,
+                    initial_responses,
+                    old_values,
+                    old_logprobs,
+                    rewards
+                )
+
+                # Optimization step
+                optimizer.zero_grad()
+                value_optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                value_optimizer.step()
+
+                if step % 10 == 0:
+                    print(f"Step {step}: Loss: {loss.item():.4f}, "
+                          f"Policy Loss: {policy_loss.item():.4f}, "
+                          f"Value Loss: {value_loss.item():.4f}, "
+                          f"KL Div: {kl_div.item():.4f}")
+
         return base_model
 
     except Exception as e:
