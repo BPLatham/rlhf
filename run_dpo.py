@@ -298,8 +298,13 @@ def train_ppo_custom(base_model, tokenizer):
         
 def test_model(base, model, tokenizer):
     print("\nTesting the model...")
-    #model = FastLanguageModel.for_inference(model)
-    model.eval()  # Ensure eval mode
+    
+    # Convert both base and final models for inference
+    base = FastLanguageModel.for_inference(base)
+    model = FastLanguageModel.for_inference(model)
+    
+    base.eval()  # Ensure eval mode for base model
+    model.eval()  # Ensure eval mode for final model
 
     test_messages = [
         {"from": "human", "value": "What is the meaning of life?"}
@@ -317,7 +322,7 @@ def test_model(base, model, tokenizer):
     _ = base.generate(
         input_ids=inputs,
         streamer=text_streamer,
-        max_new_tokens=64,  # Reduced to avoid loops
+        max_new_tokens=64,
         use_cache=True,
         do_sample=True,
         temperature=0.7,
@@ -334,7 +339,7 @@ def test_model(base, model, tokenizer):
     _ = model.generate(
         input_ids=inputs,
         streamer=text_streamer,
-        max_new_tokens=64,  # Reduced to avoid loops
+        max_new_tokens=64,
         use_cache=True,
         do_sample=True,
         temperature=0.7,
@@ -345,7 +350,7 @@ def test_model(base, model, tokenizer):
         eos_token_id=tokenizer.eos_token_id,
         pad_token_id=tokenizer.pad_token_id,
     )
-
+    
 if __name__ == "__main__":
     # First run SFT
     sft_model, tokenizer = train_sft()
