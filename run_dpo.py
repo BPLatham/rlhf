@@ -220,7 +220,7 @@ def train_ppo_custom(base_model, tokenizer):
             for step in range(config.steps_per_epoch):
                 batch = dataset[step * config.batch_size : (step + 1) * config.batch_size]
                 
-                # Prepare inputs - remove token_type_ids
+                # Prepare inputs
                 inputs = tokenizer(
                     batch['prompt'], 
                     padding=True, 
@@ -228,7 +228,6 @@ def train_ppo_custom(base_model, tokenizer):
                     max_length=config.max_length, 
                     return_tensors="pt"
                 )
-                # Remove token_type_ids if present
                 if 'token_type_ids' in inputs:
                     del inputs['token_type_ids']
                 inputs = {k: v.to(base_model.device) for k, v in inputs.items()}
@@ -286,14 +285,9 @@ def train_ppo_custom(base_model, tokenizer):
                           f"Value Loss: {value_loss.item():.4f}, "
                           f"KL Div: {kl_div.item():.4f}")
 
-        return base_model
-
-    except Exception as e:
-        print(f"\nError during PPO training: {e}")
-        print("\nFull traceback:")
-        import traceback
-        print(traceback.format_exc())
-        return base_model
+        # Convert model for inference before returning
+        inference_model = FastLanguageModel.for_inference(base_model)
+        return inference_model
 
     except Exception as e:
         print(f"\nError during PPO training: {e}")
@@ -304,7 +298,7 @@ def train_ppo_custom(base_model, tokenizer):
         
 def test_model(base, model, tokenizer):
     print("\nTesting the model...")
-    model = FastLanguageModel.for_inference(model)
+    #model = FastLanguageModel.for_inference(model)
     model.eval()  # Ensure eval mode
 
     test_messages = [
