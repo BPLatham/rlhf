@@ -79,6 +79,7 @@ def train_dynamic_dpo(base_model, tokenizer, initial_prompts):
     # Create a function to generate responses
     def generate_responses(prompt):
         inference_model = FastLanguageModel.for_inference(base_model)
+    
         messages = [{"from": "human", "value": prompt}]
         inputs = tokenizer.apply_chat_template(
             messages,
@@ -86,18 +87,60 @@ def train_dynamic_dpo(base_model, tokenizer, initial_prompts):
             add_generation_prompt=True,
             return_tensors="pt"
         ).to("cuda")
+    
         attention_mask = torch.ones_like(inputs).to("cuda")
-        # Generate two responses with different parameters
+    
         responses = []
-        for temp in [0.7, 0.8]:  # Different temperatures for diversity
-            outputs = base_model.generate(
+        # More diverse generation parameters
+        configs = [
+            {
+                'temperature': 0.9,
+                'top_p': 0.6,
+                'top_k': 50,
+                'repetition_penalty': 1.2
+            },
+            {
+                'temperature': 0.7,
+                'top_p': 0.9,
+                'top_k': 30,
+                'repetition_penalty': 1.3
+            }
+        ]
+    
+        for config in configs:
+            outputs = inference_model.generate(
                 input_ids=inputs,
+                attention_mask=attention_mask,
                 max_new_tokens=128,
-                temperature=temp,
-                use_cache=True
+                do_sample=True,
+                use_cache=True,
+                **config
             )
             response = tokenizer.decode(outputs[0], skip_special_tokens=True)
             responses.append(response)
+        
+            # Add a small delay between generations to ensure different random seeds
+            time.sleep(0.1)
+    
+        # Ensure responses are different
+        if responses[0] == responses[1]:
+            # Try again with even more different parameters
+            config = {
+                'temperature': 1.0,
+                'top_p': 0.5,
+                'top_k': 20,
+                'repetition_penalty': 1.5
+            }
+            outputs = inference_model.generate(
+                input_ids=inputs,
+                attention_mask=attention_mask,
+                max_new_tokens=128,
+                do_sample=True,
+                use_cache=True,
+                **config
+            )
+            responses[1] = tokenizer.decode(outputs[0], skip_special_tokens=True)
+    
         return responses
 
     # Function to get model's preference
