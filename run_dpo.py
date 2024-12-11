@@ -1,6 +1,4 @@
 import torch
-from trl import SFTTrainer, DPOTrainer, DPOConfig, PPOTrainer, PPOConfig
-from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, TrainingArguments, TextStreamer, BitsAndBytesConfig
 from copy import deepcopy
 from unsloth.chat_templates import get_chat_template
@@ -8,7 +6,6 @@ from unsloth import FastLanguageModel, is_bfloat16_supported
 import os
 import time
 
-# First part: Supervised Fine-Tuning
 def train_sft():
     print("Starting SFT Training...")
     max_seq_length = 2048
@@ -33,7 +30,6 @@ def train_sft():
         use_gradient_checkpointing="unsloth"
     )
 
-    # Apply chat template before returning
     tokenizer = get_chat_template(
         tokenizer,
         mapping={"role": "from", "content": "value", "user": "human", "assistant": "gpt"},
@@ -42,7 +38,6 @@ def train_sft():
 
     def apply_template(examples):
         try:
-            # Process each example in the batch
             chosen_text = [f"Human: {chosen}\nAssistant: " for chosen in examples["chosen"]]
             rejected_text = [f"Human: {rejected}\nAssistant: " for rejected in examples["rejected"]]
 
@@ -60,9 +55,8 @@ def train_sft():
     dataset = load_dataset("Anthropic/hh-rlhf", split="train")
 
     # Reduce dataset size for faster testing
-    dataset = dataset.select(range(100))  # Select the first 100 examples
+    dataset = dataset.select(range(100))
 
-    # Log the first few entries to inspect structure
     print("Sample data from dataset:")
     try:
         print(dataset[0])
@@ -116,9 +110,6 @@ def train_sft():
     print("SFT Training completed!")
     return model, tokenizer
 
-# Second part: PPO
-from typing import Optional
-
 def train_ppo_custom(base_model, tokenizer):
     print("Starting Custom PPO Training...")
 
@@ -126,7 +117,7 @@ def train_ppo_custom(base_model, tokenizer):
     class PPOConfigCustom:
         def __init__(self):
             self.learning_rate = 1e-5
-            self.batch_size = 4
+            self.batch_size = 2  # Reduce batch size
             self.epochs = 1
             self.steps_per_epoch = 100
             self.max_length = 512
@@ -207,13 +198,16 @@ def train_ppo_custom(base_model, tokenizer):
         # Convert base_model to inference mode
         base_model = FastLanguageModel.for_inference(base_model)
 
+        # Disable CUDA-specific optimizations
+        os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+
         for epoch in range(config.epochs):
             print(f"\nEpoch {epoch + 1}/{config.epochs}")
 
             for step in range(config.steps_per_epoch):
                 batch = dataset[step * config.batch_size : (step + 1) * config.batch_size]
 
-                # Prepare inputs - set padding_side='left'
+                # Prepare inputs - remove token_type_ids
                 inputs = tokenizer(
                     batch['prompt'],
                     padding=True,
@@ -290,7 +284,6 @@ def train_ppo_custom(base_model, tokenizer):
         print(traceback.format_exc())
         return base_model
 
-
 def test_model(base, model, tokenizer):
     print("\nTesting the model...")
 
@@ -302,7 +295,6 @@ def test_model(base, model, tokenizer):
         print("Final model is None. Skipping test.")
         return
 
-    # Convert both base and final models for inference
     try:
         base = FastLanguageModel.for_inference(base)
         model = FastLanguageModel.for_inference(model)
@@ -310,8 +302,8 @@ def test_model(base, model, tokenizer):
         print("Error converting model for inference:", e)
         return
 
-    base.eval()  # Ensure eval mode for base model
-    model.eval()  # Ensure eval mode for final model
+    base.eval()
+    model.eval()
 
     test_messages = [
         {"from": "human", "value": "What is the meaning of life?"}
