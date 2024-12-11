@@ -6,6 +6,7 @@ from copy import deepcopy
 from unsloth.chat_templates import get_chat_template
 from unsloth import FastLanguageModel, is_bfloat16_supported
 import os
+import traceback
 import time
 
 # First part: Supervised Fine-Tuning
@@ -149,7 +150,6 @@ def train_ppo_custom(base_model, tokenizer):
             print("Model Dimensions:", model_config.hidden_size)
         except Exception as e:
             print("Could not retrieve model configuration:", e)
-
     # Configuration
     class PPOConfigCustom:
         def __init__(self):
@@ -228,6 +228,7 @@ def train_ppo_custom(base_model, tokenizer):
 
     # Training loop
     try:
+       try:
         base_model = FastLanguageModel.for_inference(base_model)
         base_model.train()
         optimizer = torch.optim.AdamW(base_model.parameters(), lr=config.learning_rate)
@@ -258,34 +259,23 @@ def train_ppo_custom(base_model, tokenizer):
                 # Detailed tensor diagnostics
                 print_tensor_details(inputs)
 
-                # Custom generation with explicit position_ids
+                # Custom generation with alternative approach
                 with torch.no_grad():
                     try:
-                        # Create position_ids explicitly
-                        position_ids = torch.arange(
-                            0, 
-                            inputs['input_ids'].shape[1], 
-                            dtype=torch.long, 
-                            device=inputs['input_ids'].device
-                        ).unsqueeze(0).repeat(inputs['input_ids'].shape[0], 1)
-
-                        # Manual generation attempt
+                        # Try a more minimal generation approach
                         outputs = base_model.generate(
                             input_ids=inputs['input_ids'],
                             attention_mask=inputs['attention_mask'],
-                            position_ids=position_ids,  # Explicitly pass position_ids
                             max_new_tokens=16,
                             do_sample=True,
-                            temperature=0.7,
-                            pad_token_id=tokenizer.pad_token_id,
-                            eos_token_id=tokenizer.eos_token_id
+                            temperature=0.7
                         )
                         initial_responses = tokenizer.batch_decode(outputs, skip_special_tokens=True)
                     except Exception as gen_error:
                         print(f"Detailed Generation Error: {gen_error}")
-                        print(f"Error details: {traceback.format_exc()}")
+                        print("Full Generation Error Traceback:")
+                        print(traceback.format_exc())
                         continue
-
                 # Get rewards from reward model
                 reward_inputs = tokenizer(
                     batch['prompt'],
@@ -340,8 +330,7 @@ def train_ppo_custom(base_model, tokenizer):
     except Exception as e:
         print(f"\nError during PPO training: {e}")
         print("\nFull traceback:")
-        import traceback
-        traceback.print_exc()
+        print(traceback.format_exc())
         return None
 
 def test_model(base, model, tokenizer):
