@@ -38,12 +38,15 @@ def train_sft():
 
     def apply_template(examples):
         try:
-            # Validate and handle plain strings
-            if isinstance(examples["chosen"], list) and isinstance(examples["rejected"], list):
+            # Check if the fields are strings or lists
+            if isinstance(examples["chosen"], str) and isinstance(examples["rejected"], str):
+                chosen_messages = [{"from": "human", "value": examples["chosen"]}]
+                rejected_messages = [{"from": "human", "value": examples["rejected"]}]
+            elif isinstance(examples["chosen"], list) and isinstance(examples["rejected"], list):
                 chosen_messages = [{"from": "human", "value": chosen} for chosen in examples["chosen"]]
                 rejected_messages = [{"from": "human", "value": rejected} for rejected in examples["rejected"]]
             else:
-                raise ValueError("Invalid structure for examples: expected 'chosen' and 'rejected' to be lists.")
+                raise ValueError("Invalid structure for examples: expected 'chosen' and 'rejected' to be strings or lists.")
 
             print("Sample chosen message:", chosen_messages[0] if chosen_messages else "No messages")
             print("Sample rejected message:", rejected_messages[0] if rejected_messages else "No messages")
@@ -66,6 +69,9 @@ def train_sft():
 
     print("Loading SFT dataset...")
     dataset = load_dataset("Anthropic/hh-rlhf", split="train")
+
+    # Log the first few entries to inspect structure
+    print("Sample data from dataset:", dataset[0])
 
     print("Applying template to dataset...")
     try:
