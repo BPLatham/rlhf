@@ -146,22 +146,8 @@ def train_ppo(base_model, tokenizer):
 
     # Start by setting up all models
     print("Setting up models...")
-    policy = base_model
-    policy.train()
-
-    # Get the base model from PEFT wrapper
-    if hasattr(policy, "base_model"):
-        actual_model = policy.base_model.model
-    elif hasattr(policy, "model"):
-        actual_model = policy.model
-    else:
-        actual_model = policy
-
-    print(f"Actual model type: {type(actual_model)}")
-
-    # Create reference model (copy of base model)
-    ref_model = deepcopy(actual_model)
-    ref_model.eval()
+    policy = base_model  # Don't unwrap PEFT model
+    policy.train()  # Ensure in training mode
 
     # Create reward model
     print("Loading reward model...")
@@ -179,7 +165,7 @@ def train_ppo(base_model, tokenizer):
     dataset = load_dataset("Dahoas/rm-static", split="train[:1000]")
 
     print("\nModel check before PPOTrainer:")
-    print(f"Policy type: {type(actual_model)}")
+    print(f"Policy type: {type(policy)}")
     print(f"Reward model type: {type(reward_model)}")
     
     print("\nInitializing PPO trainer...")
@@ -187,11 +173,12 @@ def train_ppo(base_model, tokenizer):
         # Initialize trainer with minimal components
         ppo_trainer = PPOTrainer(
             config=ppo_config,
-            policy=actual_model,
-            ref_policy=ref_model,
+            policy=policy,
+            ref_policy=None,
             tokenizer=tokenizer,
             train_dataset=dataset,
-            reward_model=reward_model
+            reward_model=reward_model,
+            # Don't pass value_model - let PPOTrainer handle it internally
         )
 
         print("Starting PPO training...")
