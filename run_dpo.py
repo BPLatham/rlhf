@@ -62,7 +62,7 @@ def train_sft():
     # Log the first few entries to inspect structure
     print("Sample data from dataset:")
     try:
-        #print(dataset[0])
+        print(dataset[0])
     except Exception as e:
         print("Error accessing dataset sample:", e)
         return None, None
