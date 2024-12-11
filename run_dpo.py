@@ -150,6 +150,7 @@ def train_ppo_custom(base_model, tokenizer):
             print("Model Dimensions:", model_config.hidden_size)
         except Exception as e:
             print("Could not retrieve model configuration:", e)
+
     # Configuration
     class PPOConfigCustom:
         def __init__(self):
@@ -228,7 +229,6 @@ def train_ppo_custom(base_model, tokenizer):
 
     # Training loop
     try:
-       try:
         base_model = FastLanguageModel.for_inference(base_model)
         base_model.train()
         optimizer = torch.optim.AdamW(base_model.parameters(), lr=config.learning_rate)
@@ -276,6 +276,7 @@ def train_ppo_custom(base_model, tokenizer):
                         print("Full Generation Error Traceback:")
                         print(traceback.format_exc())
                         continue
+
                 # Get rewards from reward model
                 reward_inputs = tokenizer(
                     batch['prompt'],
