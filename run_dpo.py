@@ -163,9 +163,21 @@ def train_ppo_custom(base_model, tokenizer):
 def test_model(base, model, tokenizer):
     print("\nTesting the model...")
 
+    if base is None:
+        print("Base model is None. Skipping test.")
+        return
+
+    if model is None:
+        print("Final model is None. Skipping test.")
+        return
+
     # Convert both base and final models for inference
-    base = FastLanguageModel.for_inference(base)
-    model = FastLanguageModel.for_inference(model)
+    try:
+        base = FastLanguageModel.for_inference(base)
+        model = FastLanguageModel.for_inference(model)
+    except AttributeError as e:
+        print("Error converting model for inference:", e)
+        return
 
     base.eval()  # Ensure eval mode for base model
     model.eval()  # Ensure eval mode for final model
@@ -219,16 +231,8 @@ if __name__ == "__main__":
     # First run SFT
     sft_model, tokenizer = train_sft()
 
-    # Verify if SFT model and tokenizer are loaded
-    if sft_model is None or tokenizer is None:
-        print("SFT Training failed. Exiting.")
-    else:
-        # Run PPO training
+    if sft_model is not None and tokenizer is not None:
         final_model = train_ppo_custom(sft_model, tokenizer)
 
-        # Ensure final_model is not None before testing
-        if final_model is None:
-            print("PPO Training failed. Exiting.")
-        else:
-            # Test the final model
-            test_model(sft_model, final_model, tokenizer)
+        # Test the final model
+        test_model(sft_model, final_model, tokenizer)
