@@ -59,6 +59,9 @@ def train_sft():
     print("Loading SFT dataset...")
     dataset = load_dataset("Anthropic/hh-rlhf", split="train")
 
+    # Reduce dataset size for faster testing
+    dataset = dataset.select(range(100))  # Select the first 100 examples
+
     # Log the first few entries to inspect structure
     print("Sample data from dataset:")
     try:
@@ -112,6 +115,7 @@ def train_sft():
 
     print("SFT Training completed!")
     return model, tokenizer
+
 
 
 # Second part: PPO
