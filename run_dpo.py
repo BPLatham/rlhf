@@ -88,10 +88,10 @@ def train_ppo_custom(base_model, tokenizer):
     class PPOConfigCustom:
         def __init__(self):
             self.learning_rate = 1e-5
-            self.batch_size = 2  # Reduced from 4
+            self.batch_size = 2
             self.epochs = 1
             self.steps_per_epoch = 100
-            self.max_length = 2048  # Should match max_seq_length in train_sft()
+            self.max_length = 2048
             self.kl_penalty = 0.1
             self.clip_epsilon = 0.2
             self.value_loss_coef = 0.1
@@ -189,7 +189,7 @@ def train_ppo_custom(base_model, tokenizer):
                     outputs = base_model.generate(
                         input_ids=inputs['input_ids'],
                         attention_mask=inputs['attention_mask'],
-                        max_new_tokens=64,
+                        max_new_tokens=config.batch_size,  # Set max_new_tokens to match batch_size
                         do_sample=True,
                         temperature=config.temperature
                     )
@@ -199,7 +199,7 @@ def train_ppo_custom(base_model, tokenizer):
                 reward_inputs = tokenizer(batch['prompt'], initial_responses, 
                                        padding=True, 
                                        truncation=True, 
-                                       max_length=config.max_length,  # Use config.max_length here
+                                       max_length=config.max_length,
                                        return_tensors="pt")
                 if 'token_type_ids' in reward_inputs:
                     del reward_inputs['token_type_ids']
