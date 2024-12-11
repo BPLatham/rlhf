@@ -86,7 +86,7 @@ def train_dynamic_dpo(base_model, tokenizer, initial_prompts):
             add_generation_prompt=True,
             return_tensors="pt"
         ).to("cuda")
-        
+        attention_mask = torch.ones_like(inputs).to("cuda")
         # Generate two responses with different parameters
         responses = []
         for temp in [0.7, 0.8]:  # Different temperatures for diversity
@@ -205,6 +205,9 @@ def test_model(model, tokenizer):
         input_ids=inputs,
         streamer=text_streamer,
         max_new_tokens=128,
+        temperature=0.7,  # Add temperature for more interesting responses
+        top_p=0.9,       # Add top_p for better sampling
+        do_sample=True,  # Enable sampling
         use_cache=True
     )
 
