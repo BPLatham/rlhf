@@ -116,195 +116,64 @@ def train_sft():
     print("SFT Training completed!")
     return model, tokenizer
 
-
-
 # Second part: PPO
 from typing import Optional
 
 def train_ppo_custom(base_model, tokenizer):
     print("Starting Custom PPO Training...")
-    
-    # Convert base_model for inference
-    base_model = FastLanguageModel.for_inference(base_model)
-    
-    # Configuration
-    class PPOConfigCustom:
-        def __init__(self):
-            self.learning_rate = 1e-5
-            self.batch_size = 2
-            self.epochs = 1
-            self.steps_per_epoch = 100
-            self.max_length = 2048
-            self.kl_penalty = 0.1
-            self.clip_epsilon = 0.2
-            self.value_loss_coef = 0.1
-            self.temperature = 0.7
 
-    config = PPOConfigCustom()
+    # Reduce batch size for debugging
+    batch_size = 1
 
-    # Create value head
-    class ValueHead(torch.nn.Module):
-        def __init__(self, hidden_size=4096):
-            super().__init__()
-            self.v_head = torch.nn.Linear(hidden_size, 1)
-            self.v_head.to(base_model.device)
+    # Add debugging prints for tensors
+    def debug_tensor(name, tensor):
+        if tensor is not None:
+            print(f"{name} shape: {tensor.shape}")
+        else:
+            print(f"{name} is None")
 
-        def forward(self, hidden_states):
-            return self.v_head(hidden_states)
-
-    value_model = ValueHead()
-    value_optimizer = torch.optim.AdamW(value_model.parameters(), lr=config.learning_rate)
-
-    # Create reward model
-    reward_model = AutoModelForSequenceClassification.from_pretrained(
-        "lvwerra/distilbert-imdb",
-        num_labels=2,
-        ignore_mismatched_sizes=True,
-        torch_dtype=torch.float16
-    ).cuda()
-    reward_model.eval()
-
-    # Create dataset
-    dataset = load_dataset("Anthropic/hh-rlhf", split="train")
-    
-    # Custom PPO step function
-    def ppo_step(query, old_response, old_values, old_logprobs, rewards):
-        # Forward pass
-        outputs = base_model(
-            query,
-            output_hidden_states=True,
-            return_dict=True
-        )
-        
-        # Get new logprobs
-        logits = outputs.logits
-        new_logprobs = torch.nn.functional.log_softmax(logits, dim=-1)
-        
-        # Get new values
-        hidden_states = outputs.hidden_states[-1]
-        new_values = value_model(hidden_states)
-        
-        # Calculate advantages
-        advantages = rewards - old_values
-        
-        # Calculate PPO policy loss
-        ratio = torch.exp(new_logprobs - old_logprobs)
-        surr1 = ratio * advantages
-        surr2 = torch.clamp(ratio, 1.0 - config.clip_epsilon, 1.0 + config.clip_epsilon) * advantages
-        policy_loss = -torch.min(surr1, surr2).mean()
-        
-        # Calculate value loss
-        value_loss = torch.nn.functional.mse_loss(new_values, rewards + old_values)
-        
-        # Calculate KL penalty
-        kl_div = (old_logprobs - new_logprobs).mean()
-        
-        # Total loss
-        total_loss = policy_loss + config.value_loss_coef * value_loss + config.kl_penalty * kl_div
-        
-        return total_loss, policy_loss, value_loss, kl_div
-
-    # Training loop
     try:
-        base_model.train()
-        optimizer = torch.optim.AdamW(base_model.parameters(), lr=config.learning_rate)
+        for epoch in range(1):
+            print(f"\nEpoch {epoch + 1}/1")
+            # Simulate dataset loading and model output
+            # Add debugging prints for inputs and outputs
+            query = torch.rand(batch_size, 32)
+            cos = torch.rand(batch_size, 32)
+            sin = torch.rand(batch_size, 32)
 
-        for epoch in range(config.epochs):
-            print(f"\nEpoch {epoch + 1}/{config.epochs}")
-            
-            for step in range(config.steps_per_epoch):
-                batch = dataset[step * config.batch_size : (step + 1) * config.batch_size]
-                
-                # Prepare inputs
-                inputs = tokenizer(
-                    batch['chosen'], 
-                    padding=True, 
-                    truncation=True, 
-                    max_length=config.max_length, 
-                    return_tensors="pt"
-                )
-                if 'token_type_ids' in inputs:
-                    del inputs['token_type_ids']
-                inputs = {k: v.to(base_model.device) for k, v in inputs.items()}
-                
-                # Generate initial responses
-                with torch.no_grad():
-                    outputs = base_model.generate(
-                        input_ids=inputs['input_ids'],
-                        attention_mask=inputs['attention_mask'],
-                        max_new_tokens=config.batch_size,
-                        do_sample=True,
-                        temperature=config.temperature
-                    )
-                    initial_responses = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-                
-                # Get rewards from reward model
-                reward_inputs = tokenizer(batch['chosen'], initial_responses, 
-                                       padding=True, 
-                                       truncation=True, 
-                                       max_length=config.max_length,
-                                       return_tensors="pt")
-                if 'token_type_ids' in reward_inputs:
-                    del reward_inputs['token_type_ids']
-                reward_inputs = {k: v.to(reward_model.device) for k, v in reward_inputs.items()}
-                
-                with torch.no_grad():
-                    reward_outputs = reward_model(**reward_inputs)
-                    rewards = reward_outputs.logits.softmax(dim=-1)[:, 1].detach()
-                
-                # Get old values and logprobs
-                with torch.no_grad():
-                    old_outputs = base_model(**inputs, output_hidden_states=True)
-                    old_values = value_model(old_outputs.hidden_states[-1])
-                    old_logprobs = torch.nn.functional.log_softmax(old_outputs.logits, dim=-1)
-                
-                # PPO update
-                loss, policy_loss, value_loss, kl_div = ppo_step(
-                    inputs,
-                    initial_responses,
-                    old_values,
-                    old_logprobs,
-                    rewards
-                )
-                
-                # Optimization step
-                optimizer.zero_grad()
-                value_optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-                value_optimizer.step()
-                
-                if step % 10 == 0:
-                    print(f"Step {step}: Loss: {loss.item():.4f}, "
-                          f"Policy Loss: {policy_loss.item():.4f}, "
-                          f"Value Loss: {value_loss.item():.4f}, "
-                          f"KL Div: {kl_div.item():.4f}")
+            debug_tensor("Query", query)
+            debug_tensor("Cos", cos)
+            debug_tensor("Sin", sin)
 
-        # Convert model for inference before returning
-        inference_model = FastLanguageModel.for_inference(base_model)
-        return inference_model
+            # Placeholder for actual PPO logic
+            # Simulate tensor operations causing errors
+            try:
+                Q = query * cos
+                debug_tensor("Q", Q)
 
+            except RuntimeError as e:
+                print("Error during tensor operation:", e)
+                raise
+
+        print("PPO Training completed!")
     except Exception as e:
-        print(f"\nError during PPO training: {e}")
-        print("\nFull traceback:")
-        import traceback
-        print(traceback.format_exc())
-        return base_model
-        
+        print("Error during PPO training:", e)
+        raise
+
 def test_model(base, model, tokenizer):
     print("\nTesting the model...")
-    
+
     # Convert both base and final models for inference
     base = FastLanguageModel.for_inference(base)
     model = FastLanguageModel.for_inference(model)
-    
+
     base.eval()  # Ensure eval mode for base model
     model.eval()  # Ensure eval mode for final model
 
     test_messages = [
         {"from": "human", "value": "What is the meaning of life?"}
     ]
-    
+
     inputs = tokenizer.apply_chat_template(
         test_messages,
         tokenize=True,
@@ -350,10 +219,8 @@ if __name__ == "__main__":
     # First run SFT
     sft_model, tokenizer = train_sft()
 
-    final_model = train_ppo_custom(sft_model, tokenizer)
+    if sft_model is not None and tokenizer is not None:
+        final_model = train_ppo_custom(sft_model, tokenizer)
 
-    # Test the final model
-    test_model(sft_model, final_model, tokenizer)
-
-    # Test the final model
-    test_model(sft_model, final_model, tokenizer)
+        # Test the final model
+        test_model(sft_model, final_model, tokenizer)
