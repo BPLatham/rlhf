@@ -37,9 +37,11 @@ def train_sft():
     )
 
     def apply_template(examples):
-        messages = examples["conversations"]
-        text = [tokenizer.apply_chat_template(message, tokenize=False, add_generation_prompt=False) for message in messages]
-        return {"text": text}
+        chosen_messages = [{"from": "human", "value": chosen} for chosen in examples["chosen"]]
+        rejected_messages = [{"from": "human", "value": rejected} for rejected in examples["rejected"]]
+        chosen_text = [tokenizer.apply_chat_template(message, tokenize=False, add_generation_prompt=False) for message in chosen_messages]
+        rejected_text = [tokenizer.apply_chat_template(message, tokenize=False, add_generation_prompt=False) for message in rejected_messages]
+        return {"chosen_text": chosen_text, "rejected_text": rejected_text}
 
     print("Loading SFT dataset...")
     dataset = load_dataset("Anthropic/hh-rlhf", split="train")
@@ -49,7 +51,7 @@ def train_sft():
         model=model,
         tokenizer=tokenizer,
         train_dataset=dataset,
-        dataset_text_field="text",
+        dataset_text_field="chosen_text",
         max_seq_length=max_seq_length,
         dataset_num_proc=2,
         packing=True,
