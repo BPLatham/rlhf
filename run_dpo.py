@@ -146,12 +146,17 @@ def train_ppo(base_model, tokenizer):
 
     # Start by setting up all models
     print("Setting up models...")
-    # Explicitly get the underlying model
-    if hasattr(base_model, 'base_model'):
+    # Get the base transformer model
+    if hasattr(base_model, 'get_base_model'):
+        policy = base_model.get_base_model()
+    elif hasattr(base_model, 'base_model'):
         policy = base_model.base_model
     else:
         policy = base_model
     policy.train()
+
+    print(f"Policy model structure: {policy}")  # Debug print
+    print(f"Policy model base attributes: {dir(policy)}")  # Debug print
 
     # Create reward model
     print("Loading reward model...")
@@ -168,42 +173,43 @@ def train_ppo(base_model, tokenizer):
     print("\nPreparing dataset...")
     dataset = load_dataset("Dahoas/rm-static", split="train[:1000]")
 
-    # Format dataset to match expected structure
-    def format_dataset(example):
-        return {
-            "input_ids": tokenizer(example["prompt"], truncation=True, max_length=512)["input_ids"],
-            "query": example["prompt"],
-            "response": example["chosen"]
-        }
-
-    formatted_dataset = dataset.map(format_dataset)
-
     print("\nModel check before PPOTrainer:")
     print(f"Policy type: {type(policy)}")
     print(f"Reward model type: {type(reward_model)}")
     
     print("\nInitializing PPO trainer...")
     try:
-        # Initialize trainer with minimal components
+        value_model = policy  # Use same architecture for value function
+        
+        # Initialize trainer with minimal components and debug prints
+        print("Creating PPOTrainer with config:", ppo_config)
+        print("Policy model:", type(policy))
         ppo_trainer = PPOTrainer(
             config=ppo_config,
             policy=policy,
+            value_model=value_model,  # Add explicit value model
             ref_policy=None,
             tokenizer=tokenizer,
-            train_dataset=formatted_dataset,
-            reward_model=reward_model
+            train_dataset=dataset,
+            reward_model=reward_model,
         )
 
         print("Starting PPO training...")
         ppo_trainer.train()
         print("PPO Training completed!")
-        return base_model  # Return original PEFT model
+        return base_model
 
     except Exception as e:
         print(f"\nError during PPO training setup: {e}")
         print("\nFull traceback:")
         import traceback
         print(traceback.format_exc())
+        
+        # Additional error debugging
+        print("\nPolicy model structure:")
+        print(policy)
+        print("\nPolicy model attributes:")
+        print(dir(policy))
         return base_model
 
 def test_model(base, model, tokenizer):
