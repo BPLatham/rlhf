@@ -89,7 +89,7 @@ def train_dynamic_dpo(base_model, tokenizer, num_iterations=50):
     def generate_prompt():
         inference_model = FastLanguageModel.for_inference(base_model)
         
-        prompt_request = "Pretend you are a human using a language model and generate an interesting question or prompt that would test an AI's capabilities and knowledge. Output no other text but the prompt for the AI."
+        prompt_request = "Generate an interesting question or prompt that would test an AI's capabilities and knowledge. Do not respond to me with anything but the prompt. No extra words apart from the prompt you generate"
         messages = [{"from": "human", "value": prompt_request}]
         inputs = tokenizer.apply_chat_template(
             messages,
@@ -98,7 +98,6 @@ def train_dynamic_dpo(base_model, tokenizer, num_iterations=50):
             return_tensors="pt"
         ).to("cuda")
         
-        # Create attention mask
         attention_mask = torch.ones_like(inputs).to("cuda")
         
         outputs = inference_model.generate(
@@ -112,7 +111,8 @@ def train_dynamic_dpo(base_model, tokenizer, num_iterations=50):
             use_cache=True
         )
         
-        prompt = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        prompt = generated_text.split(tokenizer.eos_token)[0].strip()
         return prompt
 
     def generate_responses(prompt):
@@ -126,7 +126,6 @@ def train_dynamic_dpo(base_model, tokenizer, num_iterations=50):
             return_tensors="pt"
         ).to("cuda")
         
-        # Create attention mask
         attention_mask = torch.ones_like(inputs).to("cuda")
         
         responses = []
@@ -145,7 +144,8 @@ def train_dynamic_dpo(base_model, tokenizer, num_iterations=50):
                 use_cache=True,
                 **config
             )
-            response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+            generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+            response = generated_text.split(tokenizer.eos_token)[0].strip()
             responses.append(response)
         
         return responses
