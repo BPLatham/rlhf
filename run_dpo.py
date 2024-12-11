@@ -19,6 +19,10 @@ def train_sft():
         dtype=None,
     )
 
+    if model is None or tokenizer is None:
+        print("Failed to load model or tokenizer. Exiting.")
+        return None, None
+
     model = FastLanguageModel.get_peft_model(
         model,
         r=16,
@@ -71,7 +75,12 @@ def train_sft():
     dataset = load_dataset("Anthropic/hh-rlhf", split="train")
 
     # Log the first few entries to inspect structure
-    print("Sample data from dataset:", dataset[0])
+    print("Sample data from dataset:")
+    try:
+        print(dataset[0])
+    except Exception as e:
+        print("Error accessing dataset sample:", e)
+        return None, None
 
     print("Applying template to dataset...")
     try:
@@ -118,6 +127,7 @@ def train_sft():
 
     print("SFT Training completed!")
     return model, tokenizer
+
 
 # Second part: PPO
 from typing import Optional
