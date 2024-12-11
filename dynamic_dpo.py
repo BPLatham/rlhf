@@ -219,7 +219,7 @@ def train_dynamic_dpo(base_model, tokenizer, num_iterations=50):
                 optim="adamw_8bit",
                 remove_unused_columns=False,
                 bf16=is_bfloat16_supported(),
-                fp16=not is_bfloat16_supported()
+                fp16=not is_bfloat16_supported(),
                 output_dir="dpo_output"
             )
 
