@@ -78,6 +78,7 @@ def train_dynamic_dpo(base_model, tokenizer, initial_prompts):
     
     # Create a function to generate responses
     def generate_responses(prompt):
+        inference_model = FastLanguageModel.for_inference(base_model)
         messages = [{"from": "human", "value": prompt}]
         inputs = tokenizer.apply_chat_template(
             messages,
@@ -101,6 +102,7 @@ def train_dynamic_dpo(base_model, tokenizer, initial_prompts):
 
     # Function to get model's preference
     def get_preference(prompt, response1, response2):
+        inference_model = FastLanguageModel.for_inference(base_model)
         comparison_prompt = f"""Compare these two responses and choose the better one:
         Prompt: {prompt}
         Response 1: {response1}
