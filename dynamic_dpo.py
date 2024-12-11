@@ -134,7 +134,7 @@ def train_dynamic_dpo(base_model, tokenizer, num_iterations=50):
         
         responses = []
         configs = [
-            {'temperature': 0.9, 'top_p': 0.6, 'top_k': 50, 'repetition_penalty': 1.2},
+            {'temperature': 0.6, 'top_p': 0.6, 'top_k': 50, 'repetition_penalty': 1.2},
             {'temperature': 1.2, 'top_p': 0.4, 'top_k': 20, 'repetition_penalty': 1.5}
         ]
         
@@ -157,7 +157,12 @@ def train_dynamic_dpo(base_model, tokenizer, num_iterations=50):
     def get_preference(prompt, response1, response2, rlhf_model, rlhf_tokenizer):
         preference_prompt = f"Prompt: {prompt}\nResponse 1: {response1}\nResponse 2: {response2}\n\nWhich response is better? Provide a preference score between 0 and 1 for each response."
         
-        inputs = rlhf_tokenizer(preference_prompt, return_tensors="pt")
+        inputs = rlhf_tokenizer(preference_prompt, return_tensors="pt", max_length=1024, truncation=True)
+        attention_mask = inputs["attention_mask"]
+        position_ids = attention_mask.cumsum(dim=1) - 1
+        position_ids.masked_fill_(attention_mask == 0, 0)
+        inputs["position_ids"] = position_ids
+        
         outputs = rlhf_model.generate(**inputs, max_new_tokens=50, num_return_sequences=1)
         
         preference_text = rlhf_tokenizer.decode(outputs[0], skip_special_tokens=True)
