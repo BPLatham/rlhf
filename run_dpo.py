@@ -208,7 +208,8 @@ def train_ppo_custom(base_model, tokenizer):
             print(f"\nEpoch {epoch + 1}/{config.epochs}")
 
             for step in range(config.steps_per_epoch):
-                batch = dataset[step * config.batch_size : (step + 1) * config.batch_size]
+                # Limit the batch to exactly 2 samples
+                batch = dataset[step * 2 : (step + 1) * 2]
 
                 # Prepare inputs
                 inputs = tokenizer(
@@ -225,6 +226,11 @@ def train_ppo_custom(base_model, tokenizer):
                     del inputs['token_type_ids']
                 
                 inputs = {k: v.to("cuda") for k, v in inputs.items()}
+
+                # Debug: print input shapes
+                print("Input shapes:")
+                for k, v in inputs.items():
+                    print(f"{k}: {v.shape}")
 
                 # Generate initial responses
                 with torch.no_grad():
