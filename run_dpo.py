@@ -219,8 +219,16 @@ if __name__ == "__main__":
     # First run SFT
     sft_model, tokenizer = train_sft()
 
-    if sft_model is not None and tokenizer is not None:
+    # Verify if SFT model and tokenizer are loaded
+    if sft_model is None or tokenizer is None:
+        print("SFT Training failed. Exiting.")
+    else:
+        # Run PPO training
         final_model = train_ppo_custom(sft_model, tokenizer)
 
-        # Test the final model
-        test_model(sft_model, final_model, tokenizer)
+        # Ensure final_model is not None before testing
+        if final_model is None:
+            print("PPO Training failed. Exiting.")
+        else:
+            # Test the final model
+            test_model(sft_model, final_model, tokenizer)
