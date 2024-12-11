@@ -144,12 +144,17 @@ def train_ppo(base_model, tokenizer):
         optim="adamw_8bit"
     )
 
+    # Start by setting up all models
     print("Setting up models...")
-    policy = base_model
+    # Extract the underlying model to avoid PEFT wrapping issues
+    if hasattr(base_model, "base_model"):
+        policy = base_model.base_model.model
+    else:
+        policy = base_model.model
     policy.train()
 
     # Create reward model
-    print("\nLoading reward model...")
+    print("Loading reward model...")
     reward_model = AutoModelForSequenceClassification.from_pretrained(
         "lvwerra/distilbert-imdb",
         num_labels=2,
@@ -157,48 +162,38 @@ def train_ppo(base_model, tokenizer):
         torch_dtype=torch.float16
     ).cuda()
     reward_model.eval()
+    print("Successfully loaded reward model")
 
     # Create dataset
     print("\nPreparing dataset...")
     dataset = load_dataset("Dahoas/rm-static", split="train[:1000]")
 
+    print("\nModel check before PPOTrainer:")
+    print(f"Policy type: {type(policy)}")
+    print(f"Reward model type: {type(reward_model)}")
+    
+    print("\nInitializing PPO trainer...")
     try:
-        print("\nInitializing PPO trainer...")
-        # Debug the modules being passed
-        print("Policy modules available:", [n for n, _ in policy.named_modules()])
-        print("Reward model modules available:", [n for n, _ in reward_model.named_modules()])
-        
-        # Try to initialize with explicit module passing
-        from unsloth.trainer import PPOTrainer as UnslothPPOTrainer
-        
-        ppo_trainer = UnslothPPOTrainer(
+        # Initialize trainer with minimal components
+        ppo_trainer = PPOTrainer(
             config=ppo_config,
-            policy=policy.base_model.model,  # Get the actual underlying model
+            policy=policy,
             ref_policy=None,
             tokenizer=tokenizer,
             train_dataset=dataset,
-            reward_model=reward_model,
-            model_init_kwargs={"peft_config": policy.peft_config}  # Pass PEFT config
+            reward_model=reward_model
         )
 
         print("Starting PPO training...")
         ppo_trainer.train()
         print("PPO Training completed!")
-        return policy
+        return base_model
 
     except Exception as e:
         print(f"\nError during PPO training setup: {e}")
         print("\nFull traceback:")
         import traceback
         print(traceback.format_exc())
-        
-        # Add more debugging info
-        print("\nPolicy information:")
-        print("Type:", type(policy))
-        if hasattr(policy, 'base_model'):
-            print("Base model type:", type(policy.base_model))
-            if hasattr(policy.base_model, 'model'):
-                print("Actual model type:", type(policy.base_model.model))
         return base_model
         
 def test_model(base, model, tokenizer):
