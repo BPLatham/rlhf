@@ -188,7 +188,7 @@ def train_ppo(base_model, tokenizer):
             policy=policy,  # Changed from 'model' to 'policy'
             ref_policy=ref_model,  # Changed from 'ref_model' to 'ref_policy'
             tokenizer=tokenizer,
-            dataset=dataset,
+            train_dataset=dataset,
             reward_model=reward_model,
          )
         print("Starting PPO training...")
