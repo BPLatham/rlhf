@@ -148,10 +148,31 @@ def train_ppo(base_model, tokenizer):
     print("Setting up models...")
     # Extract the underlying model to avoid PEFT wrapping issues
     if hasattr(base_model, "base_model"):
-        policy = base_model.base_model.model
+        if hasattr(base_model.base_model, "model"):
+            policy = base_model.base_model.model
+        else:
+            policy = base_model.base_model
     else:
-        policy = base_model.model
+        policy = base_model
     policy.train()
+
+    # Override the dropout disabling function to handle None
+    import trl.trainer.utils
+    original_disable_dropout = trl.trainer.utils.disable_dropout_in_model
+    
+    def safe_disable_dropout(model):
+        if model is None:
+            return
+        if not hasattr(model, 'modules'):
+            if hasattr(model, 'module'):
+                model = model.module
+            else:
+                return
+        for module in model.modules():
+            if isinstance(module, torch.nn.Dropout):
+                module.p = 0.0
+    
+    trl.trainer.utils.disable_dropout_in_model = safe_disable_dropout
 
     # Create reward model
     print("Loading reward model...")
@@ -170,6 +191,7 @@ def train_ppo(base_model, tokenizer):
 
     print("\nModel check before PPOTrainer:")
     print(f"Policy type: {type(policy)}")
+    print(f"Policy modules available: {list(policy.named_modules())[:5]}")  # Print first 5 modules for debugging
     print(f"Reward model type: {type(reward_model)}")
     
     print("\nInitializing PPO trainer...")
@@ -187,6 +209,9 @@ def train_ppo(base_model, tokenizer):
         print("Starting PPO training...")
         ppo_trainer.train()
         print("PPO Training completed!")
+        
+        # Restore original function
+        trl.trainer.utils.disable_dropout_in_model = original_disable_dropout
         return base_model
 
     except Exception as e:
@@ -194,6 +219,9 @@ def train_ppo(base_model, tokenizer):
         print("\nFull traceback:")
         import traceback
         print(traceback.format_exc())
+        
+        # Restore original function even on error
+        trl.trainer.utils.disable_dropout_in_model = original_disable_dropout
         return base_model
         
 def test_model(base, model, tokenizer):
