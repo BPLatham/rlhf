@@ -220,17 +220,24 @@ def train_ppo_custom(base_model, tokenizer):
             for step in range(config.steps_per_epoch):
                 batch = dataset[step * config.batch_size : (step + 1) * config.batch_size]
                 
-                # Prepare inputs
-                inputs = tokenizer(batch['prompt'], 
-                                 padding=True, 
-                                 truncation=True, 
-                                 max_length=config.max_length, 
-                                 return_tensors="pt").to(base_model.device)
+                # Prepare inputs - remove token_type_ids
+                inputs = tokenizer(
+                    batch['prompt'], 
+                    padding=True, 
+                    truncation=True, 
+                    max_length=config.max_length, 
+                    return_tensors="pt"
+                )
+                # Remove token_type_ids if present
+                if 'token_type_ids' in inputs:
+                    del inputs['token_type_ids']
+                inputs = {k: v.to(base_model.device) for k, v in inputs.items()}
                 
                 # Generate initial responses
                 with torch.no_grad():
                     outputs = base_model.generate(
-                        **inputs,
+                        input_ids=inputs['input_ids'],
+                        attention_mask=inputs['attention_mask'],
                         max_new_tokens=64,
                         do_sample=True,
                         temperature=config.temperature
@@ -242,7 +249,10 @@ def train_ppo_custom(base_model, tokenizer):
                                        padding=True, 
                                        truncation=True, 
                                        max_length=config.max_length,
-                                       return_tensors="pt").to(reward_model.device)
+                                       return_tensors="pt")
+                if 'token_type_ids' in reward_inputs:
+                    del reward_inputs['token_type_ids']
+                reward_inputs = {k: v.to(reward_model.device) for k, v in reward_inputs.items()}
                 
                 with torch.no_grad():
                     reward_outputs = reward_model(**reward_inputs)
@@ -276,6 +286,13 @@ def train_ppo_custom(base_model, tokenizer):
                           f"Value Loss: {value_loss.item():.4f}, "
                           f"KL Div: {kl_div.item():.4f}")
 
+        return base_model
+
+    except Exception as e:
+        print(f"\nError during PPO training: {e}")
+        print("\nFull traceback:")
+        import traceback
+        print(traceback.format_exc())
         return base_model
 
     except Exception as e:
