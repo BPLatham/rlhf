@@ -146,18 +146,24 @@ def train_ppo(base_model, tokenizer):
 
     # Start by setting up all models
     print("Setting up models...")
-    # Get the base transformer model
-    if hasattr(base_model, 'get_base_model'):
-        policy = base_model.get_base_model()
-    elif hasattr(base_model, 'base_model'):
-        policy = base_model.base_model
-    else:
-        policy = base_model
-    policy.train()
-
-    print(f"Policy model structure: {policy}")  # Debug print
-    print(f"Policy model base attributes: {dir(policy)}")  # Debug print
-
+    policy = base_model
+    
+    # Force model into train mode since we're using PEFT
+    for module in policy.modules():
+        if hasattr(module, 'train'):
+            module.train()
+            
+    # Enable gradient checkpointing for memory efficiency
+    policy.gradient_checkpointing_enable()
+    
+    # Create value model from same architecture
+    try:
+        value_head = torch.nn.Linear(policy.config.hidden_size, 1)
+        value_head = value_head.to(policy.device)
+    except:
+        print("Failed to create value head with policy hidden size, using default size 4096")
+        value_head = torch.nn.Linear(4096, 1).to(policy.device)
+    
     # Create reward model
     print("Loading reward model...")
     reward_model = AutoModelForSequenceClassification.from_pretrained(
@@ -172,6 +178,16 @@ def train_ppo(base_model, tokenizer):
     # Create dataset
     print("\nPreparing dataset...")
     dataset = load_dataset("Dahoas/rm-static", split="train[:1000]")
+    
+    # Prepare dataset to match expected format
+    def preprocess_function(examples):
+        return {
+            "input_ids": tokenizer.encode(examples["prompt"], truncation=True, max_length=512),
+            "query": examples["prompt"],
+            "response": examples["chosen"]
+        }
+    
+    dataset = dataset.map(preprocess_function)
 
     print("\nModel check before PPOTrainer:")
     print(f"Policy type: {type(policy)}")
@@ -179,37 +195,59 @@ def train_ppo(base_model, tokenizer):
     
     print("\nInitializing PPO trainer...")
     try:
-        value_model = policy  # Use same architecture for value function
+        # Create a dummy module to handle the model structure
+        class ValueHead(torch.nn.Module):
+            def __init__(self, v_head):
+                super().__init__()
+                self.v_head = v_head
+                
+            def forward(self, hidden_states, *args, **kwargs):
+                return self.v_head(hidden_states)
         
-        # Initialize trainer with minimal components and debug prints
-        print("Creating PPOTrainer with config:", ppo_config)
-        print("Policy model:", type(policy))
+        value_model = ValueHead(value_head)
+        
+        # Initialize trainer with minimal components
         ppo_trainer = PPOTrainer(
             config=ppo_config,
             policy=policy,
-            value_model=value_model,  # Add explicit value model
             ref_policy=None,
+            value_model=value_model,
             tokenizer=tokenizer,
             train_dataset=dataset,
             reward_model=reward_model,
+            optimizer=None  # Let trainer create optimizer
         )
 
         print("Starting PPO training...")
-        ppo_trainer.train()
+        for epoch in range(ppo_config.num_train_epochs):
+            for batch in ppo_trainer.dataloader:
+                # Convert queries to tensor
+                query_tensors = batch["input_ids"]
+                
+                # Generate responses
+                response_tensors = ppo_trainer.generate(
+                    query_tensors,
+                    return_prompt=False,
+                    max_new_tokens=64,
+                    do_sample=True,
+                    temperature=0.7
+                )
+                
+                # Compute rewards
+                rewards = ppo_trainer.compute_rewards(response_tensors, query_tensors)
+                
+                # Run PPO step
+                stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
+                ppo_trainer.log_stats(stats, batch, rewards)
+
         print("PPO Training completed!")
-        return base_model
+        return policy
 
     except Exception as e:
         print(f"\nError during PPO training setup: {e}")
         print("\nFull traceback:")
         import traceback
         print(traceback.format_exc())
-        
-        # Additional error debugging
-        print("\nPolicy model structure:")
-        print(policy)
-        print("\nPolicy model attributes:")
-        print(dir(policy))
         return base_model
 
 def test_model(base, model, tokenizer):
