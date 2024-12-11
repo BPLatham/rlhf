@@ -1,11 +1,12 @@
 import torch
 from trl import SFTTrainer, DPOTrainer, DPOConfig
 from datasets import load_dataset, Dataset
-from transformers import TrainingArguments, TextStreamer
+from transformers import TrainingArguments, TextStreamer, AutoModelForCausalLM, AutoTokenizer, GPT2LMHeadModel, GPT2Tokenizer
 from unsloth.chat_templates import get_chat_template
 from unsloth import FastLanguageModel, is_bfloat16_supported
 import os
 import time
+import re
 
 def train_sft():
     print("Starting SFT Training...")
@@ -86,10 +87,13 @@ class CustomDPOTrainer(DPOTrainer):
 def train_dynamic_dpo(base_model, tokenizer, num_iterations=50):
     print("Starting Dynamic DPO Training...")
     
+    rlhf_model = GPT2LMHeadModel.from_pretrained("gpt2")
+    rlhf_tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+    
     def generate_prompt():
         inference_model = FastLanguageModel.for_inference(base_model)
         
-        prompt_request = "Generate an interesting question or prompt that would test an AI's capabilities and knowledge. Do not respond to me with anything but the prompt. No extra words apart from the prompt you generate"
+        prompt_request = "Generate an interesting question or prompt that would test an AI's capabilities and knowledge."
         messages = [{"from": "human", "value": prompt_request}]
         inputs = tokenizer.apply_chat_template(
             messages,
@@ -150,38 +154,23 @@ def train_dynamic_dpo(base_model, tokenizer, num_iterations=50):
         
         return responses
 
-    def get_preference(prompt, response1, response2):
-        inference_model = FastLanguageModel.for_inference(base_model)
+    def get_preference(prompt, response1, response2, rlhf_model, rlhf_tokenizer):
+        preference_prompt = f"Prompt: {prompt}\nResponse 1: {response1}\nResponse 2: {response2}\n\nWhich response is better? Provide a preference score between 0 and 1 for each response."
         
-        comparison_prompt = f"""Compare these two responses and choose the better one:
-        Prompt: {prompt}
-        Response 1: {response1}
-        Response 2: {response2}
-        Explain your choice and clearly state which response (1 or 2) is better."""
+        inputs = rlhf_tokenizer(preference_prompt, return_tensors="pt")
+        outputs = rlhf_model.generate(**inputs, max_length=50, num_return_sequences=1)
         
-        messages = [{"from": "human", "value": comparison_prompt}]
-        inputs = tokenizer.apply_chat_template(
-            messages,
-            tokenize=True,
-            add_generation_prompt=True,
-            return_tensors="pt"
-        ).to("cuda")
+        preference_text = rlhf_tokenizer.decode(outputs[0], skip_special_tokens=True)
+        preference_scores = extract_preference_scores(preference_text)
         
-        attention_mask = torch.ones_like(inputs).to("cuda")
-        
-        outputs = inference_model.generate(
-            input_ids=inputs,
-            attention_mask=attention_mask,
-            max_new_tokens=200,
-            temperature=0.7,
-            pad_token_id=tokenizer.pad_token_id,
-            use_cache=True
-        )
-        preference = tokenizer.decode(outputs[0], skip_special_tokens=True)
-        
-        if "response 1" in preference.lower():
+        if preference_scores[0] > preference_scores[1]:
             return response1, response2
-        return response2, response1
+        else:
+            return response2, response1
+
+    def extract_preference_scores(text):
+        scores = re.findall(r"(\d\.\d+)", text)
+        return [float(score) for score in scores]
 
     preference_data = []
     print(f"\nStarting dynamic preference collection for {num_iterations} iterations...")
@@ -196,7 +185,7 @@ def train_dynamic_dpo(base_model, tokenizer, num_iterations=50):
         print(f"\nResponse 1: {responses[0]}")
         print(f"\nResponse 2: {responses[1]}")
         
-        chosen, rejected = get_preference(prompt, responses[0], responses[1])
+        chosen, rejected = get_preference(prompt, responses[0], responses[1], rlhf_model, rlhf_tokenizer)
         print(f"\nChosen response: {chosen}")
         
         preference_data.append({
