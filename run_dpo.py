@@ -227,6 +227,9 @@ def train_ppo_custom(base_model, tokenizer):
         return total_loss, policy_loss, value_loss, kl_div
 
     # Training loop
+    def train_ppo_custom(base_model, tokenizer):
+    # ... (previous code remains the same)
+
     try:
         base_model = FastLanguageModel.for_inference(base_model)
         base_model.train()
@@ -258,17 +261,23 @@ def train_ppo_custom(base_model, tokenizer):
                 # Detailed tensor diagnostics
                 print_tensor_details(inputs)
 
-                # Ensure attention_mask matches input_ids shape
-                if inputs['attention_mask'].shape != inputs['input_ids'].shape:
-                    inputs['attention_mask'] = torch.ones_like(inputs['input_ids'])
-
-                # Generate initial responses with careful configuration
+                # Custom generation with explicit position_ids
                 with torch.no_grad():
                     try:
+                        # Create position_ids explicitly
+                        position_ids = torch.arange(
+                            0, 
+                            inputs['input_ids'].shape[1], 
+                            dtype=torch.long, 
+                            device=inputs['input_ids'].device
+                        ).unsqueeze(0).repeat(inputs['input_ids'].shape[0], 1)
+
+                        # Manual generation attempt
                         outputs = base_model.generate(
                             input_ids=inputs['input_ids'],
                             attention_mask=inputs['attention_mask'],
-                            max_new_tokens=16,  # Reduced new tokens
+                            position_ids=position_ids,  # Explicitly pass position_ids
+                            max_new_tokens=16,
                             do_sample=True,
                             temperature=0.7,
                             pad_token_id=tokenizer.pad_token_id,
@@ -276,8 +285,18 @@ def train_ppo_custom(base_model, tokenizer):
                         )
                         initial_responses = tokenizer.batch_decode(outputs, skip_special_tokens=True)
                     except Exception as gen_error:
-                        print(f"Generation error: {gen_error}")
+                        print(f"Detailed Generation Error: {gen_error}")
+                        print(f"Error details: {traceback.format_exc()}")
                         continue
+
+                # Rest of the code remains the same...
+
+    except Exception as e:
+        print(f"\nError during PPO training: {e}")
+        print("\nFull traceback:")
+        import traceback
+        traceback.print_exc()
+        return None
 
                 # Get rewards from reward model
                 reward_inputs = tokenizer(
