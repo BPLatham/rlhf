@@ -1,12 +1,11 @@
 import torch
 from trl import SFTTrainer, DPOTrainer, DPOConfig
-from datasets import load_dataset
+from datasets import load_dataset, Dataset
 from transformers import TrainingArguments, TextStreamer
 from unsloth.chat_templates import get_chat_template
 from unsloth import FastLanguageModel, is_bfloat16_supported
 import os
 import time
-
 
 def train_sft():
     print("Starting SFT Training...")
@@ -33,6 +32,11 @@ def train_sft():
         mapping={"role": "from", "content": "value", "user": "human", "assistant": "gpt"},
         chat_template="chatml",
     )
+    
+    # Set pad token to avoid attention mask issues
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+        model.config.pad_token_id = tokenizer.pad_token_id
 
     def apply_template(examples):
         messages = examples["conversations"]
@@ -73,13 +77,47 @@ def train_sft():
     print("SFT Training completed!")
     return model, tokenizer
 
-def train_dynamic_dpo(base_model, tokenizer, initial_prompts):
+class CustomDPOTrainer(DPOTrainer):
+    def log(self, logs, start_time=None):
+        if start_time:
+            logs["time"] = time.time() - start_time
+        super().log(logs)
+
+def train_dynamic_dpo(base_model, tokenizer, num_iterations=50):
     print("Starting Dynamic DPO Training...")
     
-    # Create a function to generate responses
+    def generate_prompt():
+        inference_model = FastLanguageModel.for_inference(base_model)
+        
+        prompt_request = "Generate an interesting question or prompt that would test an AI's capabilities and knowledge."
+        messages = [{"from": "human", "value": prompt_request}]
+        inputs = tokenizer.apply_chat_template(
+            messages,
+            tokenize=True,
+            add_generation_prompt=True,
+            return_tensors="pt"
+        ).to("cuda")
+        
+        # Create attention mask
+        attention_mask = torch.ones_like(inputs).to("cuda")
+        
+        outputs = inference_model.generate(
+            input_ids=inputs,
+            attention_mask=attention_mask,
+            max_new_tokens=64,
+            temperature=0.9,
+            top_p=0.6,
+            do_sample=True,
+            pad_token_id=tokenizer.pad_token_id,
+            use_cache=True
+        )
+        
+        prompt = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        return prompt
+
     def generate_responses(prompt):
         inference_model = FastLanguageModel.for_inference(base_model)
-    
+        
         messages = [{"from": "human", "value": prompt}]
         inputs = tokenizer.apply_chat_template(
             messages,
@@ -87,65 +125,34 @@ def train_dynamic_dpo(base_model, tokenizer, initial_prompts):
             add_generation_prompt=True,
             return_tensors="pt"
         ).to("cuda")
-    
+        
+        # Create attention mask
         attention_mask = torch.ones_like(inputs).to("cuda")
-    
+        
         responses = []
-        # More diverse generation parameters
         configs = [
-            {
-                'temperature': 0.9,
-                'top_p': 0.6,
-                'top_k': 50,
-                'repetition_penalty': 1.2
-            },
-            {
-                'temperature': 0.7,
-                'top_p': 0.9,
-                'top_k': 30,
-                'repetition_penalty': 1.3
-            }
+            {'temperature': 0.9, 'top_p': 0.6, 'top_k': 50, 'repetition_penalty': 1.2},
+            {'temperature': 1.2, 'top_p': 0.4, 'top_k': 20, 'repetition_penalty': 1.5}
         ]
-    
+        
         for config in configs:
             outputs = inference_model.generate(
                 input_ids=inputs,
                 attention_mask=attention_mask,
                 max_new_tokens=128,
                 do_sample=True,
+                pad_token_id=tokenizer.pad_token_id,
                 use_cache=True,
                 **config
             )
             response = tokenizer.decode(outputs[0], skip_special_tokens=True)
             responses.append(response)
         
-            # Add a small delay between generations to ensure different random seeds
-            time.sleep(0.1)
-    
-        # Ensure responses are different
-        if responses[0] == responses[1]:
-            # Try again with even more different parameters
-            config = {
-                'temperature': 1.0,
-                'top_p': 0.5,
-                'top_k': 20,
-                'repetition_penalty': 1.5
-            }
-            outputs = inference_model.generate(
-                input_ids=inputs,
-                attention_mask=attention_mask,
-                max_new_tokens=128,
-                do_sample=True,
-                use_cache=True,
-                **config
-            )
-            responses[1] = tokenizer.decode(outputs[0], skip_special_tokens=True)
-    
         return responses
 
-    # Function to get model's preference
     def get_preference(prompt, response1, response2):
         inference_model = FastLanguageModel.for_inference(base_model)
+        
         comparison_prompt = f"""Compare these two responses and choose the better one:
         Prompt: {prompt}
         Response 1: {response1}
@@ -160,81 +167,83 @@ def train_dynamic_dpo(base_model, tokenizer, initial_prompts):
             return_tensors="pt"
         ).to("cuda")
         
-        outputs = base_model.generate(
+        attention_mask = torch.ones_like(inputs).to("cuda")
+        
+        outputs = inference_model.generate(
             input_ids=inputs,
+            attention_mask=attention_mask,
             max_new_tokens=200,
             temperature=0.7,
+            pad_token_id=tokenizer.pad_token_id,
             use_cache=True
         )
         preference = tokenizer.decode(outputs[0], skip_special_tokens=True)
         
-        # Simple parsing of preference
         if "response 1" in preference.lower():
             return response1, response2
         return response2, response1
 
-    # Collect dynamic preferences
     preference_data = []
-    for prompt in initial_prompts:
+    print(f"\nStarting dynamic preference collection for {num_iterations} iterations...")
+    
+    for iteration in range(num_iterations):
+        print(f"\nIteration {iteration + 1}/{num_iterations}")
+        
+        prompt = generate_prompt()
+        print(f"\nGenerated prompt: {prompt}")
+        
         responses = generate_responses(prompt)
+        print(f"\nResponse 1: {responses[0]}")
+        print(f"\nResponse 2: {responses[1]}")
+        
         chosen, rejected = get_preference(prompt, responses[0], responses[1])
+        print(f"\nChosen response: {chosen}")
+        
         preference_data.append({
             "prompt": prompt,
             "chosen": chosen,
             "rejected": rejected
         })
+        
+        if (iteration + 1) % 10 == 0:
+            print(f"\nPerforming DPO update with {len(preference_data)} examples...")
+            preference_dataset = Dataset.from_list(preference_data)
+            
+            training_args = DPOConfig(
+                per_device_train_batch_size=2,
+                learning_rate=5e-5,
+                num_train_epochs=1,
+                gradient_accumulation_steps=2,
+                save_strategy="no",
+                logging_steps=1,
+                optim="adamw_8bit",
+                remove_unused_columns=False,
+                bf16=is_bfloat16_supported(),
+                fp16=not is_bfloat16_supported()
+            )
 
-    # Create dataset from collected preferences
-    from datasets import Dataset
-    preference_dataset = Dataset.from_list(preference_data)
+            dpo_trainer = CustomDPOTrainer(
+                model=base_model,
+                ref_model=None,
+                tokenizer=tokenizer,
+                train_dataset=preference_dataset,
+                args=training_args,
+                beta=0.1,
+                max_prompt_length=512,
+                max_length=1024,
+            )
+            
+            dpo_trainer.train()
+            preference_data = []
 
-    # Use your existing DPO training setup
-    training_args = DPOConfig(
-        per_device_train_batch_size=2,
-        learning_rate=5e-5,
-        num_train_epochs=1,
-        gradient_accumulation_steps=2,
-        save_strategy="epoch",
-        logging_steps=10,
-        output_dir="dynamic_dpo_output",
-        optim="adamw_8bit",
-        remove_unused_columns=False,
-        bf16=is_bfloat16_supported(),
-        fp16=not is_bfloat16_supported()
-    )
-
-    # Enable gradient checkpointing
-    base_model.gradient_checkpointing_enable()
-
-    class CustomDPOTrainer(DPOTrainer):
-        def log(self, logs, start_time=None):
-            if start_time:
-                logs["time"] = time.time() - start_time
-            super().log(logs)
-
-    dpo_trainer = CustomDPOTrainer(
-        model=base_model,
-        ref_model=None,
-        tokenizer=tokenizer,
-        train_dataset=preference_dataset,
-        args=training_args,
-        beta=0.1,
-        max_prompt_length=512,
-        max_length=1024,
-    )
-
-    print("Starting DPO training...")
-    dpo_trainer.train()
     print("Dynamic DPO Training completed!")
-    
-    dpo_trainer.save_model("dynamic_final_model")
-    return dpo_trainer.model
+    return base_model
 
-def test_model(model, tokenizer):
-    print("\nTesting the model...")
+def test_model(model, tokenizer, prompt="What is the meaning of life?"):
+    print(f"\nTesting the model with prompt: {prompt}")
     model = FastLanguageModel.for_inference(model)
     test_messages = [
-        {"from": "human", "value": "What is the meaning of life?"},
+        {"from": "human", "value": prompt},
     ]
     inputs = tokenizer.apply_chat_template(
         test_messages,
@@ -242,33 +251,36 @@ def test_model(model, tokenizer):
         add_generation_prompt=True,
         return_tensors="pt",
     ).to("cuda")
+    
+    attention_mask = torch.ones_like(inputs).to("cuda")
+    
     print("Model response:")
     text_streamer = TextStreamer(tokenizer)
     _ = model.generate(
         input_ids=inputs,
+        attention_mask=attention_mask,
         streamer=text_streamer,
         max_new_tokens=128,
-        temperature=0.7,  # Add temperature for more interesting responses
-        top_p=0.9,       # Add top_p for better sampling
-        do_sample=True,  # Enable sampling
+        temperature=0.7,
+        top_p=0.9,
+        do_sample=True,
+        pad_token_id=tokenizer.pad_token_id,
         use_cache=True
     )
 
-# Modify your main function to use dynamic DPO
 if __name__ == "__main__":
     # First run SFT
     sft_model, tokenizer = train_sft()
     
-    # Define initial prompts for dynamic training
-    initial_prompts = [
-        "Explain quantum computing in simple terms",
-        "What are the ethical implications of AI?",
-        "How would you solve climate change?",
-        "Describe the importance of space exploration"
+    # Run dynamic DPO with 50 iterations
+    final_model = train_dynamic_dpo(sft_model, tokenizer, num_iterations=50)
+    
+    # Test with multiple prompts
+    test_prompts = [
+        "What is the meaning of life?",
+        "How does consciousness work?",
+        "What is the future of technology?"
     ]
     
-    # Run dynamic DPO
-    final_model = train_dynamic_dpo(sft_model, tokenizer, initial_prompts)
-    
-    # Test the final model
-    test_model(final_model, tokenizer)
+    for prompt in test_prompts:
+        test_model(final_model, tokenizer, prompt)
