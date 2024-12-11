@@ -227,9 +227,6 @@ def train_ppo_custom(base_model, tokenizer):
         return total_loss, policy_loss, value_loss, kl_div
 
     # Training loop
-    def train_ppo_custom(base_model, tokenizer):
-    # ... (previous code remains the same)
-
     try:
         base_model = FastLanguageModel.for_inference(base_model)
         base_model.train()
@@ -288,15 +285,6 @@ def train_ppo_custom(base_model, tokenizer):
                         print(f"Detailed Generation Error: {gen_error}")
                         print(f"Error details: {traceback.format_exc()}")
                         continue
-
-                # Rest of the code remains the same...
-
-    except Exception as e:
-        print(f"\nError during PPO training: {e}")
-        print("\nFull traceback:")
-        import traceback
-        traceback.print_exc()
-        return None
 
                 # Get rewards from reward model
                 reward_inputs = tokenizer(
