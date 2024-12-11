@@ -75,62 +75,14 @@ def train_sft():
     print("SFT Training completed!")
     return model, tokenizer
 
-# Second part: Direct Preference Optimization (will switch to PPO later)
-def train_dpo(base_model, tokenizer):
-    print("Starting DPO Training...")
-
-    # Load preference dataset
-    preference_dataset = load_dataset("mlabonne/orpo-dpo-mix-40k", split="train[:1000]")
-
-    # Create a custom DPOTrainer class to handle logging because the default one throws error when logging
-    class CustomDPOTrainer(DPOTrainer):
-        def log(self, logs, start_time=None):
-            """Override log method to handle both 2 and 3 argument versions"""
-            if start_time:
-                logs["time"] = time.time() - start_time
-            super().log(logs)
-
-    training_args = DPOConfig(
-        per_device_train_batch_size=2,
-        learning_rate=5e-5,
-        num_train_epochs=1,
-        gradient_accumulation_steps=2,
-        save_strategy="epoch",
-        logging_steps=10,
-        output_dir="dpo_output",
-        optim="adamw_8bit",
-        remove_unused_columns=False,
-        bf16=is_bfloat16_supported(),
-        fp16=not is_bfloat16_supported()
-    )
-
-    # Enable gradient checkpointing
-    base_model.gradient_checkpointing_enable()
-
-    dpo_trainer = CustomDPOTrainer(
-        model=base_model,
-        ref_model=None,  # We'll use implicit reference model
-        tokenizer=tokenizer,
-        train_dataset=preference_dataset,
-        args=training_args,
-        beta=0.1,  # KL penalty coefficient
-        max_prompt_length=512,
-        max_length=1024,
-    )
-
-    print("Starting DPO training...")
-    dpo_trainer.train()
-    print("DPO Training completed!")
-
-    # Save the final model
-    dpo_trainer.save_model("final_model")
-    return dpo_trainer.model
-
 # Second part: PPO
 from typing import Optional
 
 def train_ppo_custom(base_model, tokenizer):
     print("Starting Custom PPO Training...")
+    
+    # Convert base_model for inference
+    base_model = FastLanguageModel.for_inference(base_model)
     
     # Configuration
     class PPOConfigCustom:
@@ -350,13 +302,10 @@ def test_model(base, model, tokenizer):
         eos_token_id=tokenizer.eos_token_id,
         pad_token_id=tokenizer.pad_token_id,
     )
-    
+
 if __name__ == "__main__":
     # First run SFT
     sft_model, tokenizer = train_sft()
-
-    # Then run DPO
-    # final_model = train_dpo(sft_model, tokenizer)
 
     final_model = train_ppo_custom(sft_model, tokenizer)
 
