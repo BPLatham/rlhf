@@ -122,44 +122,67 @@ from typing import Optional
 def train_ppo_custom(base_model, tokenizer):
     print("Starting Custom PPO Training...")
 
-    # Reduce batch size for debugging
-    batch_size = 1
+    # Configuration
+    class PPOConfigCustom:
+        def __init__(self):
+            self.learning_rate = 1e-5
+            self.batch_size = 2
+            self.epochs = 1
+            self.steps_per_epoch = 100
+            self.max_length = 2048
+            self.kl_penalty = 0.1
+            self.clip_epsilon = 0.2
+            self.value_loss_coef = 0.1
 
-    # Add debugging prints for tensors
-    def debug_tensor(name, tensor):
-        if tensor is not None:
-            print(f"{name} shape: {tensor.shape}")
-        else:
-            print(f"{name} is None")
+    config = PPOConfigCustom()
+
+    # Placeholder for actual PPO logic
+    optimizer = torch.optim.AdamW(base_model.parameters(), lr=config.learning_rate)
 
     try:
-        for epoch in range(1):
-            print(f"\nEpoch {epoch + 1}/1")
-            # Simulate dataset loading and model output
-            query = torch.rand(batch_size, 32).to("cuda")
-            cos = torch.rand(batch_size, 32).to("cuda")
-            sin = torch.rand(batch_size, 32).to("cuda")
+        for epoch in range(config.epochs):
+            print(f"\nEpoch {epoch + 1}/{config.epochs}")
 
-            debug_tensor("Query", query)
-            debug_tensor("Cos", cos)
-            debug_tensor("Sin", sin)
+            for step in range(config.steps_per_epoch):
+                query = torch.randint(0, 100, (config.batch_size, config.max_length)).to("cuda")
 
-            try:
-                Q = query * cos
-                debug_tensor("Q", Q)
+                # Simulate outputs and rewards
+                old_logprobs = torch.rand(config.batch_size, config.max_length).to("cuda")
+                rewards = torch.rand(config.batch_size, config.max_length).to("cuda")
 
-            except RuntimeError as e:
-                print("Error during tensor operation:", e)
-                raise
+                # Compute new logits (placeholder for actual model forward pass)
+                logits = torch.rand_like(old_logprobs)
+                logprobs = torch.nn.functional.log_softmax(logits, dim=-1)
+
+                # Compute advantages
+                advantages = rewards - rewards.mean(dim=0, keepdim=True)
+
+                # PPO loss calculation
+                ratio = torch.exp(logprobs - old_logprobs)
+                surr1 = ratio * advantages
+                surr2 = torch.clamp(ratio, 1.0 - config.clip_epsilon, 1.0 + config.clip_epsilon) * advantages
+                policy_loss = -torch.min(surr1, surr2).mean()
+
+                # Simulated value loss
+                value_loss = ((rewards - rewards.mean(dim=0, keepdim=True)) ** 2).mean()
+
+                # Total loss
+                total_loss = policy_loss + config.value_loss_coef * value_loss
+
+                optimizer.zero_grad()
+                total_loss.backward()
+                optimizer.step()
+
+                if step % 10 == 0:
+                    print(f"Step {step}: Policy Loss: {policy_loss.item():.4f}, Value Loss: {value_loss.item():.4f}")
 
         print("PPO Training completed!")
-        # Simulate returning the updated model
-        return base_model  # Replace with actual model logic
+        return base_model
 
     except Exception as e:
         print("Error during PPO training:", e)
         return None
-        
+
 def test_model(base, model, tokenizer):
     print("\nTesting the model...")
 
@@ -171,6 +194,7 @@ def test_model(base, model, tokenizer):
         print("Final model is None. Skipping test.")
         return
 
+    # Convert both base and final models for inference
     try:
         base = FastLanguageModel.for_inference(base)
         model = FastLanguageModel.for_inference(model)
@@ -178,69 +202,60 @@ def test_model(base, model, tokenizer):
         print("Error converting model for inference:", e)
         return
 
-    # Test responses only if conversion was successful
-    base.eval()
-    model.eval()
+    base.eval()  # Ensure eval mode for base model
+    model.eval()  # Ensure eval mode for final model
 
     test_messages = [
         {"from": "human", "value": "What is the meaning of life?"}
     ]
 
-    try:
-        inputs = tokenizer.apply_chat_template(
-            test_messages,
-            tokenize=True,
-            add_generation_prompt=True,
-            return_tensors="pt"
-        ).to("cuda")
+    inputs = tokenizer.apply_chat_template(
+        test_messages,
+        tokenize=True,
+        add_generation_prompt=True,
+        return_tensors="pt"
+    ).to("cuda")
 
-        print("Base response:")
-        text_streamer = TextStreamer(tokenizer)
-        _ = base.generate(
-            input_ids=inputs,
-            streamer=text_streamer,
-            max_new_tokens=64,
-            use_cache=True,
-            do_sample=True,
-            temperature=0.7,
-            top_k=50,
-            top_p=0.9,
-            repetition_penalty=1.2,
-            no_repeat_ngram_size=3,
-            eos_token_id=tokenizer.eos_token_id,
-            pad_token_id=tokenizer.pad_token_id,
-        )
+    print("Base response:")
+    text_streamer = TextStreamer(tokenizer)
+    _ = base.generate(
+        input_ids=inputs,
+        streamer=text_streamer,
+        max_new_tokens=64,
+        use_cache=True,
+        do_sample=True,
+        temperature=0.7,
+        top_k=50,
+        top_p=0.9,
+        repetition_penalty=1.2,
+        no_repeat_ngram_size=3,
+        eos_token_id=tokenizer.eos_token_id,
+        pad_token_id=tokenizer.pad_token_id,
+    )
 
-        print("Model response:")
-        text_streamer = TextStreamer(tokenizer)
-        _ = model.generate(
-            input_ids=inputs,
-            streamer=text_streamer,
-            max_new_tokens=64,
-            use_cache=True,
-            do_sample=True,
-            temperature=0.7,
-            top_k=50,
-            top_p=0.9,
-            repetition_penalty=1.2,
-            no_repeat_ngram_size=3,
-            eos_token_id=tokenizer.eos_token_id,
-            pad_token_id=tokenizer.pad_token_id,
-        )
-
-    except Exception as e:
-        print("Error during testing:", e)
-
+    print("Model response:")
+    text_streamer = TextStreamer(tokenizer)
+    _ = model.generate(
+        input_ids=inputs,
+        streamer=text_streamer,
+        max_new_tokens=64,
+        use_cache=True,
+        do_sample=True,
+        temperature=0.7,
+        top_k=50,
+        top_p=0.9,
+        repetition_penalty=1.2,
+        no_repeat_ngram_size=3,
+        eos_token_id=tokenizer.eos_token_id,
+        pad_token_id=tokenizer.pad_token_id,
+    )
 
 if __name__ == "__main__":
+    # First run SFT
     sft_model, tokenizer = train_sft()
 
     if sft_model is not None and tokenizer is not None:
         final_model = train_ppo_custom(sft_model, tokenizer)
 
-        if final_model is not None:
-            test_model(sft_model, final_model, tokenizer)
-        else:
-            print("Final model was not successfully trained.")
-    else:
-        print("SFT model or tokenizer is None. Exiting.")
+        # Test the final model
+        test_model(sft_model, final_model, tokenizer)
