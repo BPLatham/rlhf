@@ -148,6 +148,11 @@ def train_ppo(base_model, tokenizer):
     print("Setting up models...")
     policy = base_model  # Don't unwrap PEFT model
     policy.train()  # Ensure in training mode
+    
+    # Create reference model from the same architecture
+    print("Creating reference model...")
+    ref_policy = type(policy)(policy.config)
+    ref_policy.eval()  # Set to evaluation mode
 
     # Create reward model
     print("Loading reward model...")
@@ -166,6 +171,7 @@ def train_ppo(base_model, tokenizer):
 
     print("\nModel check before PPOTrainer:")
     print(f"Policy type: {type(policy)}")
+    print(f"Reference policy type: {type(ref_policy)}")
     print(f"Reward model type: {type(reward_model)}")
     
     print("\nInitializing PPO trainer...")
@@ -192,7 +198,8 @@ def train_ppo(base_model, tokenizer):
         ppo_trainer = PPOTrainer(
             config=ppo_config,
             policy=policy,
-            value_model=value_model,  # Use our custom value head
+            ref_policy=ref_policy,  # Add reference policy
+            value_model=value_model,
             tokenizer=tokenizer,
             train_dataset=dataset,
             reward_model=reward_model
