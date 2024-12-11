@@ -148,16 +148,22 @@ def train_ppo(base_model, tokenizer):
     print("Setting up models...")
     policy = base_model  # Keep PEFT model
     policy.train()
+    
+    # Make sure model modules are properly initialized
+    if hasattr(policy, "pretrained_model"):
+        actual_model = policy.pretrained_model
+    else:
+        actual_model = policy
 
-    # Create reference model (copy of base model)
-    ref_model = deepcopy(policy)
+    # Create reference model
+    ref_model = deepcopy(actual_model)
     ref_model.eval()
 
     # Create reward model
     print("Loading reward model...")
     reward_model = AutoModelForSequenceClassification.from_pretrained(
         "lvwerra/distilbert-imdb",
-        num_labels=1,  # Changed to 1 for scalar rewards
+        num_labels=2,
         ignore_mismatched_sizes=True,
         torch_dtype=torch.float16
     ).cuda()
@@ -168,15 +174,6 @@ def train_ppo(base_model, tokenizer):
     print("\nPreparing dataset...")
     dataset = load_dataset("Dahoas/rm-static", split="train[:1000]")
 
-    # Prepare dataset formatting function
-    def format_dataset(example):
-        return {
-            "query": example["prompt"],
-            "response": example["chosen"]
-        }
-
-    dataset = dataset.map(format_dataset)
-
     print("\nModel check before PPOTrainer:")
     print(f"Policy type: {type(policy)}")
     print(f"Reward model type: {type(reward_model)}")
@@ -185,35 +182,15 @@ def train_ppo(base_model, tokenizer):
     try:
         ppo_trainer = PPOTrainer(
             config=ppo_config,
-            policy=policy,  # Changed from 'model' to 'policy'
-            ref_policy=ref_model,  # Changed from 'ref_model' to 'ref_policy'
+            policy=actual_model,
+            ref_policy=ref_model,
             tokenizer=tokenizer,
             train_dataset=dataset,
             reward_model=reward_model,
-         )
-        print("Starting PPO training...")
-        for epoch in range(ppo_config.num_train_epochs):
-            for batch in ppo_trainer.dataloader:
-                # Generate responses
-                query_tensors = batch["query"]
-                response_tensors = batch["response"]
-                
-                # Forward pass
-                outputs = ppo_trainer.generate(
-                    query_tensors,
-                    return_prompt=False,
-                    max_new_tokens=64,
-                    do_sample=True,
-                    temperature=0.7
-                )
-                
-                # Compute rewards
-                rewards = ppo_trainer.compute_rewards(outputs, response_tensors)
-                
-                # Run PPO step
-                stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
-                ppo_trainer.log_stats(stats, batch, rewards)
+        )
 
+        print("Starting PPO training...")
+        ppo_trainer.train()
         print("PPO Training completed!")
         return policy
 
