@@ -170,10 +170,10 @@ def train_ppo_custom(base_model, tokenizer):
         logits = outputs.logits
         new_logprobs = torch.nn.functional.log_softmax(logits, dim=-1)
     
-        # Align tensor shapes if needed
-        if new_logprobs.shape != old_logprobs.shape:
-            new_logprobs = new_logprobs.view_as(old_logprobs)
-    
+        # Ensure tensor shapes are compatible
+        old_values = old_values.view(-1, 1)
+        rewards = rewards.view(-1, 1)
+        
         # Get new values
         hidden_states = outputs.hidden_states[-1]
         new_values = value_model(hidden_states)
@@ -218,7 +218,13 @@ def train_ppo_custom(base_model, tokenizer):
                     truncation=True,
                     max_length=config.max_length,
                     return_tensors="pt"
-                ).to("cuda")
+                )
+                
+                # Remove token_type_ids if present
+                if 'token_type_ids' in inputs:
+                    del inputs['token_type_ids']
+                
+                inputs = {k: v.to("cuda") for k, v in inputs.items()}
 
                 # Generate initial responses
                 with torch.no_grad():
@@ -240,7 +246,13 @@ def train_ppo_custom(base_model, tokenizer):
                     truncation=True,
                     max_length=config.max_length,
                     return_tensors="pt"
-                ).to("cuda")
+                )
+                
+                # Remove token_type_ids if present
+                if 'token_type_ids' in reward_inputs:
+                    del reward_inputs['token_type_ids']
+                
+                reward_inputs = {k: v.to("cuda") for k, v in reward_inputs.items()}
 
                 with torch.no_grad():
                     reward_outputs = reward_model(**reward_inputs)
@@ -282,6 +294,7 @@ def train_ppo_custom(base_model, tokenizer):
         import traceback
         traceback.print_exc()
         return None
+
 
 def test_model(base, model, tokenizer):
     print("\nTesting the model...")
