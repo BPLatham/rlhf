@@ -164,20 +164,20 @@ def train_ppo_custom(base_model, tokenizer):
     # Custom PPO step function
     def ppo_step(query, old_response, old_values, old_logprobs, rewards):
         # Forward pass
-        outputs = base_model(
-            query,
-            output_hidden_states=True,
-            return_dict=True
-        )
-
+        outputs = base_model(query, output_hidden_states=True, return_dict=True)
+    
         # Get new logprobs
         logits = outputs.logits
         new_logprobs = torch.nn.functional.log_softmax(logits, dim=-1)
-
+    
+        # Align tensor shapes if needed
+        if new_logprobs.shape != old_logprobs.shape:
+        new_logprobs = new_logprobs.view_as(old_logprobs)
+    
         # Get new values
         hidden_states = outputs.hidden_states[-1]
         new_values = value_model(hidden_states)
-
+    
         # Calculate advantages
         advantages = rewards - old_values
 
@@ -186,16 +186,16 @@ def train_ppo_custom(base_model, tokenizer):
         surr1 = ratio * advantages
         surr2 = torch.clamp(ratio, 1.0 - config.clip_epsilon, 1.0 + config.clip_epsilon) * advantages
         policy_loss = -torch.min(surr1, surr2).mean()
-
+    
         # Calculate value loss
         value_loss = torch.nn.functional.mse_loss(new_values, rewards + old_values)
-
+    
         # Calculate KL penalty
         kl_div = (old_logprobs - new_logprobs).mean()
-
+    
         # Total loss
         total_loss = policy_loss + config.value_loss_coef * value_loss + config.kl_penalty * kl_div
-
+    
         return total_loss, policy_loss, value_loss, kl_div
 
     # Training loop
