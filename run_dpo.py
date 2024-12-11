@@ -185,13 +185,12 @@ def train_ppo(base_model, tokenizer):
     try:
         ppo_trainer = PPOTrainer(
             config=ppo_config,
-            model=policy,  # Changed from policy to model
-            ref_model=ref_model,
+            policy=policy,  # Changed from 'model' to 'policy'
+            ref_policy=ref_model,  # Changed from 'ref_model' to 'ref_policy'
             tokenizer=tokenizer,
-            dataset=dataset,  # Changed from train_dataset
+            dataset=dataset,
             reward_model=reward_model,
-        )
-
+         )
         print("Starting PPO training...")
         for epoch in range(ppo_config.num_train_epochs):
             for batch in ppo_trainer.dataloader:
