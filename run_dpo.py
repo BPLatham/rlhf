@@ -146,28 +146,13 @@ def train_ppo(base_model, tokenizer):
 
     print("Setting up models...")
     policy = base_model
-    
-    # Debug print to understand model structure
-    print("\nExamining policy model structure:")
-    print("Has modules method:", hasattr(policy, 'modules'))
-    print("Has base_model:", hasattr(policy, 'base_model'))
-    if hasattr(policy, 'base_model'):
-        print("Base model type:", type(policy.base_model))
-    
-    # Try to handle the modules issue
-    def get_modules(model):
-        if hasattr(model, 'modules'):
-            return model.modules()
-        elif hasattr(model, 'base_model'):
-            return model.base_model.modules()
-        elif hasattr(model, 'model'):
-            return model.model.modules()
-        else:
-            return []
+    policy.train()
 
-    # Monkey patch the model if needed
-    if not hasattr(policy, 'modules'):
-        policy.modules = lambda: get_modules(policy)
+    # Get the underlying model
+    if hasattr(policy, 'get_base_model'):
+        actual_model = policy.get_base_model()
+    else:
+        actual_model = policy
 
     # Create reward model
     print("\nLoading reward model...")
@@ -183,15 +168,27 @@ def train_ppo(base_model, tokenizer):
     print("\nPreparing dataset...")
     dataset = load_dataset("Dahoas/rm-static", split="train[:1000]")
 
-    print("\nModel check before PPOTrainer:")
-    print(f"Policy type: {type(policy)}")
-    print(f"Reward model type: {type(reward_model)}")
-    
+    # Monkey patch the disable_dropout_in_model function
+    def safe_disable_dropout(model):
+        if model is None:
+            print("Warning: Trying to disable dropout on None model")
+            return
+        if not hasattr(model, 'modules'):
+            print(f"Warning: Model {type(model)} has no modules method")
+            return
+        for module in model.modules():
+            if isinstance(module, torch.nn.Dropout):
+                module.p = 0.0
+
+    # Replace the original function
+    import trl.trainer.utils
+    trl.trainer.utils.disable_dropout_in_model = safe_disable_dropout
+
     try:
-        # Try to initialize PPOTrainer
+        print("\nInitializing PPO trainer...")
         ppo_trainer = PPOTrainer(
             config=ppo_config,
-            policy=policy,
+            policy=actual_model,  # Use the actual base model
             ref_policy=None,
             tokenizer=tokenizer,
             train_dataset=dataset,
@@ -208,12 +205,6 @@ def train_ppo(base_model, tokenizer):
         print("\nFull traceback:")
         import traceback
         print(traceback.format_exc())
-        
-        # Additional debugging info
-        print("\nModel structure investigation:")
-        for attr in dir(policy):
-            if not attr.startswith('_'):
-                print(f"Has {attr}:", hasattr(policy, attr))
         return base_model
         
 def test_model(base, model, tokenizer):
