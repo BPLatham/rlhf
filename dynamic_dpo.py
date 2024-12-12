@@ -22,14 +22,29 @@ warnings.filterwarnings('ignore')
 logging.getLogger('transformers').setLevel(logging.ERROR)
 
 def clean_generated_text(text):
-    """Remove template tokens and clean up the text."""
+    """Improved cleaning of generated text."""
+    # Remove the prompt from the beginning if it appears
+    prompt_pattern = r'^.*?\?(?=\n|$)'
+    text = re.sub(prompt_pattern, '', text)
+    
     # Remove template tokens
-    cleaned = re.sub(r'<\|im_start\|>(?:user|assistant|system)', '', text)
+    text = re.sub(r'<\|im_start\|>(?:user|assistant|system)', '', text)
+    
     # Remove redundant newlines
-    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
-    # Remove leading/trailing whitespace
-    cleaned = cleaned.strip()
-    return cleaned
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    
+    # Remove repeated content
+    lines = text.split('\n')
+    unique_lines = []
+    for line in lines:
+        if line not in unique_lines:
+            unique_lines.append(line)
+    text = '\n'.join(unique_lines)
+    
+    # Remove any remaining prompt echoes
+    text = re.sub(r'^.*?(?:What is|How does|Why|When|Where)\s+.*?\?\s*', '', text)
+    
+    return text.strip()
 
 def prepare_reward_model():
     """Prepare the OpenAssistant reward model for preference learning."""
@@ -40,7 +55,6 @@ def prepare_reward_model():
         "OpenAssistant/reward-model-deberta-v3-large-v2",
         torch_dtype=torch.bfloat16 if is_bfloat16_supported() else torch.float16
     )
-    # Manually move model to CUDA
     model = model.to("cuda")
     
     tokenizer = AutoTokenizer.from_pretrained("OpenAssistant/reward-model-deberta-v3-large-v2")
@@ -143,29 +157,28 @@ def generate_responses(model, tokenizer, prompt):
     
     responses = []
     configs = [
-        {'temperature': 0.7, 'top_p': 0.9, 'top_k': 50},
-        {'temperature': 1.4, 'top_p': 0.3, 'top_k': 20}
+        {'temperature': 0.7, 'top_p': 0.9, 'top_k': 50, 'repetition_penalty': 1.5},
+        {'temperature': 1.2, 'top_p': 0.3, 'top_k': 20, 'repetition_penalty': 1.8}
     ]
     
     for config in configs:
         outputs = inference_model.generate(
             input_ids=inputs,
             attention_mask=torch.ones_like(inputs).to("cuda"),
-            max_new_tokens=150,
+            max_new_tokens=200,
+            min_new_tokens=50,
             do_sample=True,
             pad_token_id=tokenizer.pad_token_id,
-            repetition_penalty=1.2,
+            no_repeat_ngram_size=3,
+            num_beams=1,
             **config
         )
         generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
         cleaned_response = clean_generated_text(generated_text)
-        
-        if cleaned_response.startswith(prompt):
-            cleaned_response = cleaned_response[len(prompt):].strip()
-        
         responses.append(cleaned_response)
     
-    if responses[0] == responses[1]:
+    # Verify responses are different and non-empty
+    if not responses[0] or not responses[1] or responses[0] == responses[1]:
         return None
         
     return responses
@@ -215,7 +228,7 @@ def train_dynamic_dpo(base_model, tokenizer, num_iterations):
         prompt = generate_prompt()
         responses = generate_responses(base_model, tokenizer, prompt)
         if responses is None:
-            print("Generated identical responses - retrying")
+            print("Generated identical or empty responses - retrying")
             continue
             
         chosen, rejected = get_preference(prompt, responses[0], responses[1], reward_model, reward_tokenizer)
@@ -286,9 +299,12 @@ def test_model(model, tokenizer, prompts):
         output = model.generate(
             input_ids=inputs,
             attention_mask=torch.ones_like(inputs).to("cuda"),
-            max_new_tokens=128,
+            max_new_tokens=200,
+            min_new_tokens=50,
             temperature=0.7,
             top_p=0.9,
+            repetition_penalty=1.5,
+            no_repeat_ngram_size=3,
             do_sample=True,
             pad_token_id=tokenizer.pad_token_id,
         )
@@ -307,7 +323,7 @@ if __name__ == "__main__":
     test_prompts = generate_test_prompts()
     sft_model, tokenizer = train_sft()
     responses_before_dpo = test_model(sft_model, tokenizer, test_prompts)
-    final_model = train_dynamic_dpo(sft_model, tokenizer, num_iterations=100)
+    final_model = train_dynamic_dpo(sft_model, tokenizer, num_iterations=10)
     responses_after_dpo = test_model(final_model, tokenizer, test_prompts)
 
     with open("test_results.txt", "w") as file:
