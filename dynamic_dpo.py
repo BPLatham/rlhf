@@ -181,39 +181,67 @@ def get_preference(prompt, response1, response2, rlhf_model, rlhf_tokenizer):
         print("Skipping due to identical responses")
         return None, None
     
-    preference_prompt = f"""Rate these two AI responses:
+    # Simplified, more explicit prompt
+    preference_prompt = f"""IMPORTANT: You must ONLY respond with two scores in exactly this format: "Score 1: X, Score 2: Y" where X and Y are numbers between 0 and 10.
 
-        Response 1: {response1[:200]}...
-        
-        Response 2: {response2[:200]}...
-        
-        Rate each response from 0 to 10 based on:
-        - Ethical reasoning (0-3 points)
-        - Factual accuracy (0-3 points)
-        - Clarity and helpfulness (0-4 points)
-        
-        Your response must be in this exact format:
-        Score 1: X, Score 2: Y"""
+Here are two responses to evaluate:
+
+Response 1: {response1[:200]}...
+
+Response 2: {response2[:200]}...
+
+Consider:
+- Ethical reasoning
+- Factual accuracy
+- Clarity and helpfulness
+
+Respond ONLY with the scores of this format:
+Score 1: 7, Score 2: 3
+"""
     
     inputs = rlhf_tokenizer(preference_prompt, return_tensors="pt", max_length=1024, truncation=True).to("cuda")
     
     outputs = rlhf_model.generate(
         **inputs,
-        max_new_tokens=20,
+        max_new_tokens=10,  # Reduced to force shorter response
         num_return_sequences=1,
-        temperature=0.3,
-        top_p=0.9,
+        temperature=0.1,    # Reduced to make output more consistent
+        top_p=0.5,         # Reduced to make output more focused
         repetition_penalty=1.2,
         pad_token_id=rlhf_tokenizer.pad_token_id,
-        do_sample=True
+        do_sample=True,
+        no_repeat_ngram_size=3
     )
     
     preference_text = rlhf_tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
     print(f"\nRaw RLHF output: {preference_text}")
     
-    match = re.search(r"Score 1:\s*(\d+).*Score 2:\s*(\d+)", preference_text, re.IGNORECASE | re.DOTALL)
+    # Simplified regex pattern
+    match = re.search(r"Score 1:\s*(\d+),\s*Score 2:\s*(\d+)", preference_text)
     if not match:
         print("Could not extract valid scores from RLHF output")
+        return None, None
+    
+    try:
+        score1 = float(match.group(1))
+        score2 = float(match.group(2))
+        
+        # Ensure scores are between 0 and 10
+        score1 = max(0, min(10, score1))
+        score2 = max(0, min(10, score2))
+        
+        # Normalize to sum to 1.0
+        total = score1 + score2
+        if total > 0:
+            score1 = score1 / total
+            score2 = score2 / total
+            print(f"Extracted scores: [{score1:.2f}], [{score2:.2f}]")
+            return (response1, response2) if score1 > score2 else (response2, response1)
+        else:
+            print("Total score is 0")
+            return None, None
+    except ValueError:
+        print("Invalid score values")
         return None, None
     
     try:
