@@ -174,9 +174,11 @@ def train_dynamic_dpo(base_model, tokenizer, num_iterations=50):
             return response2, response1
 
     def extract_preference_scores(text):
-        scores = re.findall(r"(\d\.\d+)", text)
-        if len(scores) == 2:
-            return [float(score) for score in scores]
+        match = re.search(r"\*\[(\d\.\d+)\],\s*\[(\d\.\d+)\]\*", text)
+        if match:
+            score1 = float(match.group(1))
+            score2 = float(match.group(2))
+            return [score1, score2]
         else:
             print(f"Warning: Unable to extract preference scores from the generated text: {text}")
             return [0.5, 0.5]  # Return default scores if not found
