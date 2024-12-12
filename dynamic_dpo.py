@@ -126,11 +126,11 @@ Response 1:
 Response 2:
 {cleaned_response2}
 
-Rate each response on a scale of 0.0 to 1.0, where 1.0 is the best.
+Rate each response on a scale of 0.0 to 1.0, where 1.0 is the best making sure that the scores total 1.0.
 Your response must follow this exact format:
 *[score for response 1], [score for response 2]*
 
-Example of correct format: *[0.8], [0.6]*"""
+Example of correct format: *[0.8], [0.2]*"""
     
     inputs = rlhf_tokenizer(preference_prompt, return_tensors="pt", max_length=1024, truncation=True).to("cuda")
     
