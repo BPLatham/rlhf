@@ -352,8 +352,8 @@ def generate_test_prompts():
 if __name__ == "__main__":
     test_prompts = generate_test_prompts()
     sft_model, tokenizer = train_sft()
-    responses_before_dpo = test_model(sft_model, tokenizer, test_prompts)
-    final_model = train_dynamic_dpo(sft_model, tokenizer, num_iterations=100)
+   # responses_before_dpo = test_model(sft_model, tokenizer, test_prompts)
+    final_model = train_dynamic_dpo(sft_model, tokenizer, num_iterations=3)
     responses_after_dpo = test_model(final_model, tokenizer, test_prompts)
 
     with open("test_results.txt", "w") as file:
