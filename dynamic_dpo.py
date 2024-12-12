@@ -1,7 +1,13 @@
 import torch
 from trl import SFTTrainer, DPOTrainer, DPOConfig
 from datasets import load_dataset, Dataset
-from transformers import TrainingArguments, TextStreamer, AutoModelForCausalLM, AutoTokenizer, GPT2LMHeadModel, GPT2Tokenizer
+from transformers import (
+    TrainingArguments, 
+    TextStreamer, 
+    AutoModelForCausalLM, 
+    AutoTokenizer,
+    AutoModelForSequenceClassification
+)
 from unsloth.chat_templates import get_chat_template
 from unsloth import FastLanguageModel, is_bfloat16_supported
 import os
@@ -9,6 +15,7 @@ import time
 import re
 import warnings
 import logging
+import random
 
 # Suppress warnings
 warnings.filterwarnings('ignore')
@@ -24,31 +31,17 @@ def clean_generated_text(text):
     cleaned = cleaned.strip()
     return cleaned
 
-def prepare_rlhf_model():
-    """Prepare the RLHF model with proper tokenization and special tokens."""
+def prepare_reward_model():
+    """Prepare the OpenAssistant reward model for preference learning."""
     warnings.filterwarnings('ignore')
     logging.getLogger('transformers').setLevel(logging.ERROR)
     
-    model = GPT2LMHeadModel.from_pretrained(
-        "gpt2",
-        pad_token_id=50256,
-        add_cross_attention=False,
-        is_decoder=True,
-        low_cpu_mem_usage=True,
+    model = AutoModelForSequenceClassification.from_pretrained(
+        "OpenAssistant/reward-model-deberta-v3-large-v2",
+        device_map="auto",
+        torch_dtype=torch.bfloat16 if is_bfloat16_supported() else torch.float16
     )
-    tokenizer = GPT2Tokenizer.from_pretrained(
-        "gpt2",
-        pad_token='<|endoftext|>',
-        padding_side='left'
-    )
-    
-    special_tokens = {
-        'additional_special_tokens': ['*[', ']*', '[', ']'],
-        'pad_token': '<|endoftext|>'
-    }
-    _ = tokenizer.add_special_tokens(special_tokens)
-    model.resize_token_embeddings(len(tokenizer))
-    
+    tokenizer = AutoTokenizer.from_pretrained("OpenAssistant/reward-model-deberta-v3-large-v2")
     return model, tokenizer
 
 def train_sft():
@@ -134,7 +127,6 @@ def generate_prompt():
         "How should AI balance individual privacy with collective benefit?",
         "What role should AI play in decision-making about human lives?"
     ]
-    import random
     return random.choice(prompts)
 
 def generate_responses(model, tokenizer, prompt):
@@ -176,66 +168,36 @@ def generate_responses(model, tokenizer, prompt):
         
     return responses
 
-def get_preference(prompt, response1, response2, rlhf_model, rlhf_tokenizer):
+def get_preference(prompt, response1, response2, reward_model, reward_tokenizer):
     if response1 is None or response2 is None:
         print("Skipping due to identical responses")
         return None, None
+        
+    # Format full responses for scoring
+    full_response1 = f"Human: {prompt}\n\nAssistant: {response1}"
+    full_response2 = f"Human: {prompt}\n\nAssistant: {response2}"
     
-    # Much shorter, focused prompt
-    preference_prompt = f"""Rate these two responses (0-10):
-
-1: {response1[:200]}...
-
-2: {response2[:200]}...
-
-Score 1: """  # Note: we end with "Score 1: " to guide the model
+    # Tokenize both responses
+    inputs1 = reward_tokenizer(full_response1, return_tensors="pt", truncation=True, max_length=512).to("cuda")
+    inputs2 = reward_tokenizer(full_response2, return_tensors="pt", truncation=True, max_length=512).to("cuda")
     
-    inputs = rlhf_tokenizer(preference_prompt, return_tensors="pt", max_length=1024, truncation=True).to("cuda")
+    # Get scores
+    with torch.no_grad():
+        score1 = reward_model(**inputs1).logits[0].item()
+        score2 = reward_model(**inputs2).logits[0].item()
     
-    outputs = rlhf_model.generate(
-        **inputs,
-        max_new_tokens=8,     # Very short, just enough for two numbers
-        num_return_sequences=1,
-        temperature=0.1,
-        top_p=0.5,
-        repetition_penalty=1.2,
-        pad_token_id=rlhf_tokenizer.pad_token_id,
-        do_sample=True,
-    )
+    # Convert scores to probabilities using softmax
+    scores = torch.softmax(torch.tensor([score1, score2]), dim=0)
+    score1, score2 = scores.tolist()
     
-    # Only decode the new tokens, not the entire sequence
-    preference_text = rlhf_tokenizer.decode(outputs[0][inputs.input_ids.shape[1]:], skip_special_tokens=True).strip()
-    print(f"\nRLHF scores: {preference_text}")
+    print(f"\nReward scores: [{score1:.2f}], [{score2:.2f}]")
     
-    # Look for two numbers in the generated text
-    numbers = re.findall(r'\d+', preference_text)
-    if len(numbers) >= 2:
-        try:
-            score1 = float(numbers[0])
-            score2 = float(numbers[1])
-            
-            # Ensure scores are between 0 and 10
-            score1 = max(0, min(10, score1))
-            score2 = max(0, min(10, score2))
-            
-            # Normalize to sum to 1.0
-            total = score1 + score2
-            if total > 0:
-                score1 = score1 / total
-                score2 = score2 / total
-                print(f"Normalized scores: [{score1:.2f}], [{score2:.2f}]")
-                return (response1, response2) if score1 > score2 else (response2, response1)
-        except ValueError:
-            pass
-    
-    print("Could not extract valid scores")
-    return None, None
+    return (response1, response2) if score1 > score2 else (response2, response1)
 
 def train_dynamic_dpo(base_model, tokenizer, num_iterations):
     print("Starting Dynamic DPO Training...")
     
-    rlhf_model, rlhf_tokenizer = prepare_rlhf_model()
-    rlhf_model = rlhf_model.to("cuda")
+    reward_model, reward_tokenizer = prepare_reward_model()
     
     preference_data = []
     print(f"\nStarting dynamic preference collection for {num_iterations} iterations...")
@@ -254,7 +216,7 @@ def train_dynamic_dpo(base_model, tokenizer, num_iterations):
             print("Generated identical responses - retrying")
             continue
             
-        chosen, rejected = get_preference(prompt, responses[0], responses[1], rlhf_model, rlhf_tokenizer)
+        chosen, rejected = get_preference(prompt, responses[0], responses[1], reward_model, reward_tokenizer)
         
         if chosen is None or rejected is None:
             print("Invalid preference pair - retrying")
