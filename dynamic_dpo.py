@@ -45,7 +45,7 @@ def train_sft():
         return {"text": text}
 
     print("Loading SFT dataset...")
-    dataset = load_dataset("mlabonne/FineTome-100k", split="train[:100000]")
+    dataset = load_dataset("mlabonne/FineTome-100k", split="train[:1000]")
     dataset = dataset.map(apply_template, batched=True)
 
     trainer = SFTTrainer(
