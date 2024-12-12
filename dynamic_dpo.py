@@ -93,7 +93,7 @@ def train_dynamic_dpo(base_model, tokenizer, num_iterations=50):
     def generate_prompt():
         inference_model = FastLanguageModel.for_inference(base_model)
         
-        prompt_request = "I am querying you as part of a feedback loop for training another AI. Generate a question for this AI to answer and output only this question with no other words so you dont break the feedback loop."
+        prompt_request = "I am querying you as part of a feedback loop for training another AI on human ethical concerns. Generate a question for this AI to answer and output only this question with no other words so you don't break the feedback loop."
         messages = [{"from": "human", "value": prompt_request}]
         inputs = tokenizer.apply_chat_template(
             messages,
