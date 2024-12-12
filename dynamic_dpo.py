@@ -129,27 +129,19 @@ class CustomDPOTrainer(DPOTrainer):
         super().log(logs)
 
 def get_preference(prompt, response1, response2, rlhf_model, rlhf_tokenizer):
-    # Clean the responses
     cleaned_prompt = clean_generated_text(prompt)
     cleaned_response1 = clean_generated_text(response1)
     cleaned_response2 = clean_generated_text(response2)
     
-    preference_prompt = f"""Given two AI responses to a prompt, evaluate which response is better based on these criteria:
-1. Ethical reasoning (0-0.33 points)
-2. Factual accuracy (0-0.33 points)
-3. Helpfulness and clarity (0-0.34 points)
+    preference_prompt = f"""Compare two responses and rate them:
 
-Prompt: {cleaned_prompt}
+Response 1: {cleaned_response1[:200]}...
 
-Response 1:
-{cleaned_response1}
+Response 2: {cleaned_response2[:200]}...
 
-Response 2:
-{cleaned_response2}
-
-Sum the points for each response and provide scores that add up to 1.0.
-Your response must follow this exact format: *[score1], [score2]*
-Example of correct format: *[0.6], [0.4]*"""
+Rate each response from 0 to 10. Higher is better.
+Format your response exactly like this: Score 1: X, Score 2: Y
+Example: Score 1: 7, Score 2: 4"""
     
     inputs = rlhf_tokenizer(preference_prompt, return_tensors="pt", max_length=1024, truncation=True).to("cuda")
     
@@ -157,51 +149,55 @@ Example of correct format: *[0.6], [0.4]*"""
         **inputs,
         max_new_tokens=20,
         num_return_sequences=1,
-        temperature=0.7,
-        top_p=0.95,
-        top_k=50,
+        temperature=0.3,
+        top_p=0.9,
         repetition_penalty=1.2,
         pad_token_id=rlhf_tokenizer.pad_token_id,
         do_sample=True
     )
     
     preference_text = rlhf_tokenizer.decode(outputs[0], skip_special_tokens=True)
-    preference_scores = extract_preference_scores(preference_text)
+    print(f"\nRaw RLHF output: {preference_text}")
     
-    print(f"\nScores: [{preference_scores[0]:.2f}], [{preference_scores[1]:.2f}]")
-    
-    return (response1, response2) if preference_scores[0] > preference_scores[1] else (response2, response1)
+    scores = extract_preference_scores(preference_text)
+    if scores is None:
+        print("Could not extract valid preference scores - skipping this iteration")
+        return None, None
+        
+    print(f"Extracted scores: [{scores[0]:.2f}], [{scores[1]:.2f}]")
+    return (response1, response2) if scores[0] > scores[1] else (response2, response1)
 
 def extract_preference_scores(text):
     patterns = [
-        r"\*\[(\d*\.?\d+)\],\s*\[(\d*\.?\d+)\]\*",
-        r"\[(\d*\.?\d+)\],\s*\[(\d*\.?\d+)\]",
-        r"(\d*\.?\d+)\s*,\s*(\d*\.?\d+)",
+        r"Score 1:\s*(\d+)[.,]?\s*Score 2:\s*(\d+)",
+        r"(\d+)\s*[,/]\s*(\d+)",
+        r"First.*?(\d+).*?Second.*?(\d+)",
+        r"Response 1.*?(\d+).*?Response 2.*?(\d+)",
+        r"(\d+).*?(\d+)",
     ]
     
     for pattern in patterns:
-        match = re.search(pattern, text)
+        match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
         if match:
             try:
                 score1 = float(match.group(1))
                 score2 = float(match.group(2))
                 
-                # Normalize scores to sum to 1.0
+                # Convert to 0-1 range if larger numbers were used
+                if score1 > 1 or score2 > 1:
+                    score1 = score1 / 10
+                    score2 = score2 / 10
+                
+                # Normalize to sum to 1.0
                 total = score1 + score2
                 if total > 0:
                     score1 = score1 / total
                     score2 = score2 / total
-                else:
-                    score1, score2 = 0.6, 0.4
-                
-                return [score1, score2]
+                    return [score1, score2]
             except ValueError:
                 continue
     
-    # Fallback: generate reasonable scores that sum to 1.0
-    import random
-    score1 = random.uniform(0.4, 0.6)
-    return [score1, 1.0 - score1]
+    return None  # Return None if no valid scores could be extracted
 
 def train_dynamic_dpo(base_model, tokenizer, num_iterations):
     print("Starting Dynamic DPO Training...")
@@ -266,12 +262,17 @@ def train_dynamic_dpo(base_model, tokenizer, num_iterations):
     preference_data = []
     print(f"\nStarting dynamic preference collection for {num_iterations} iterations...")
     
-    for iteration in range(num_iterations):
+    iteration = 0
+    while iteration < num_iterations:
         print(f"\nIteration {iteration + 1}/{num_iterations}")
         
         prompt = generate_prompt()
         responses = generate_responses(prompt)
         chosen, rejected = get_preference(prompt, responses[0], responses[1], rlhf_model, rlhf_tokenizer)
+        
+        if chosen is None or rejected is None:
+            print("Skipping iteration due to invalid scores")
+            continue
         
         preference_data.append({
             "prompt": prompt,
@@ -279,7 +280,9 @@ def train_dynamic_dpo(base_model, tokenizer, num_iterations):
             "rejected": rejected
         })
         
-        if (iteration + 1) % 10 == 0:
+        iteration += 1
+        
+        if len(preference_data) >= 10:
             print(f"\nPerforming DPO update with {len(preference_data)} examples...")
             preference_dataset = Dataset.from_list(preference_data)
             
