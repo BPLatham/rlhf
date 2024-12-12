@@ -188,14 +188,14 @@ def train_dynamic_dpo(base_model, tokenizer, num_iterations=50):
         print(f"\nIteration {iteration + 1}/{num_iterations}")
         
         prompt = generate_prompt()
-        print(f"\nGenerated prompt: {prompt}")
+        # print(f"\nGenerated prompt: {prompt}")
         
         responses = generate_responses(prompt)
-        print(f"\nResponse 1: {responses[0]}")
-        print(f"\nResponse 2: {responses[1]}")
+        # print(f"\nResponse 1: {responses[0]}")
+        # print(f"\nResponse 2: {responses[1]}")
         
         chosen, rejected = get_preference(prompt, responses[0], responses[1], rlhf_model, rlhf_tokenizer)
-        print(f"\nChosen response: {chosen}")
+        # print(f"\nChosen response: {chosen}")
         
         preference_data.append({
             "prompt": prompt,
@@ -238,48 +238,67 @@ def train_dynamic_dpo(base_model, tokenizer, num_iterations=50):
     print("Dynamic DPO Training completed!")
     return base_model
 
-def test_model(model, tokenizer, prompt="What is the meaning of life?"):
-    print(f"\nTesting the model with prompt: {prompt}")
-    model = FastLanguageModel.for_inference(model)
-    test_messages = [
-        {"from": "human", "value": prompt},
-    ]
-    inputs = tokenizer.apply_chat_template(
-        test_messages,
-        tokenize=True,
-        add_generation_prompt=True,
-        return_tensors="pt",
-    ).to("cuda")
-    
-    attention_mask = torch.ones_like(inputs).to("cuda")
-    
-    print("Model response:")
-    text_streamer = TextStreamer(tokenizer)
-    _ = model.generate(
-        input_ids=inputs,
-        attention_mask=attention_mask,
-        streamer=text_streamer,
-        max_new_tokens=128,
-        temperature=0.7,
-        top_p=0.9,
-        do_sample=True,
-        pad_token_id=tokenizer.pad_token_id,
-        use_cache=True
-    )
+def test_model(model, tokenizer, prompts):
+    responses = []
+    for prompt in prompts:
+        model = FastLanguageModel.for_inference(model)
+        test_messages = [
+            {"from": "human", "value": prompt},
+        ]
+        inputs = tokenizer.apply_chat_template(
+            test_messages,
+            tokenize=True,
+            add_generation_prompt=True,
+            return_tensors="pt",
+        ).to("cuda")
+        
+        attention_mask = torch.ones_like(inputs).to("cuda")
+        
+        output = model.generate(
+            input_ids=inputs,
+            attention_mask=attention_mask,
+            max_new_tokens=128,
+            temperature=0.7,
+            top_p=0.9,
+            do_sample=True,
+            pad_token_id=tokenizer.pad_token_id,
+            use_cache=True
+        )
+        response = tokenizer.decode(output[0], skip_special_tokens=True)
+        responses.append(response)
+    return responses
 
-if __name__ == "__main__":
-    # First run SFT
-    sft_model, tokenizer = train_sft()
-    
-    # Run dynamic DPO with 50 iterations
-    final_model = train_dynamic_dpo(sft_model, tokenizer, num_iterations=50)
-    
-    # Test with multiple prompts
-    test_prompts = [
+def generate_test_prompts():
+    return [
         "What is the meaning of life?",
         "How does consciousness work?",
         "What is the future of technology?"
     ]
-    
-    for prompt in test_prompts:
-        test_model(final_model, tokenizer, prompt)
+
+if __name__ == "__main__":
+    # Generate test prompts
+    test_prompts = generate_test_prompts()
+
+    # First run SFT
+    sft_model, tokenizer = train_sft()
+
+    # Test the model before DPO feedback loop
+    responses_before_dpo = test_model(sft_model, tokenizer, test_prompts)
+
+    # Run dynamic DPO with 50 iterations
+    final_model = train_dynamic_dpo(sft_model, tokenizer, num_iterations=50)
+
+    # Test the model after DPO feedback loop
+    responses_after_dpo = test_model(final_model, tokenizer, test_prompts)
+
+    # Save the responses before and after DPO feedback loop to a file
+    with open("test_results.txt", "w") as file:
+        file.write("Responses before DPO feedback loop:\n")
+        for prompt, response in zip(test_prompts, responses_before_dpo):
+            file.write(f"Prompt: {prompt}\n")
+            file.write(f"Response: {response}\n\n")
+
+        file.write("Responses after DPO feedback loop:\n")
+        for prompt, response in zip(test_prompts, responses_after_dpo):
+            file.write(f"Prompt: {prompt}\n")
+            file.write(f"Response: {response}\n\n")
