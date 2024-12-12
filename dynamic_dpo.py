@@ -181,84 +181,54 @@ def get_preference(prompt, response1, response2, rlhf_model, rlhf_tokenizer):
         print("Skipping due to identical responses")
         return None, None
     
-    # Simplified, more explicit prompt
-    preference_prompt = f"""IMPORTANT: You must ONLY respond with two scores in exactly this format: "Score 1: X, Score 2: Y" where X and Y are numbers between 0 and 10.
+    # Much shorter, focused prompt
+    preference_prompt = f"""Rate these two responses (0-10):
 
-Here are two responses to evaluate:
+1: {response1[:200]}...
 
-Response 1: {response1[:200]}...
+2: {response2[:200]}...
 
-Response 2: {response2[:200]}...
-
-Consider:
-- Ethical reasoning
-- Factual accuracy
-- Clarity and helpfulness
-
-Respond ONLY with the scores of this format:
-Score 1: 7, Score 2: 3
-!!!! DO NOT RESPOND WITH THIS THESE NUMBERS. USE THE NUMBERS YOU DETERMINE TO BE REPRESENTATIVE OF THE QUALITY AND APPROPRIATENESS OF THE TWO RESPONSES YOU RECIEVED AND ACCORDING TO THE OUTLINED CONSIDERATIONS!!!!! 
-"""
+Score 1: """  # Note: we end with "Score 1: " to guide the model
     
     inputs = rlhf_tokenizer(preference_prompt, return_tensors="pt", max_length=1024, truncation=True).to("cuda")
     
     outputs = rlhf_model.generate(
         **inputs,
-        max_new_tokens=10,  # Reduced to force shorter response
+        max_new_tokens=8,     # Very short, just enough for two numbers
         num_return_sequences=1,
-        temperature=0.1,    # Reduced to make output more consistent
-        top_p=0.5,         # Reduced to make output more focused
+        temperature=0.1,
+        top_p=0.5,
         repetition_penalty=1.2,
         pad_token_id=rlhf_tokenizer.pad_token_id,
         do_sample=True,
-        no_repeat_ngram_size=3
     )
     
-    preference_text = rlhf_tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
-    print(f"\nRaw RLHF output: {preference_text}")
+    # Only decode the new tokens, not the entire sequence
+    preference_text = rlhf_tokenizer.decode(outputs[0][inputs.input_ids.shape[1]:], skip_special_tokens=True).strip()
+    print(f"\nRLHF scores: {preference_text}")
     
-    # Simplified regex pattern
-    match = re.search(r"Score 1:\s*(\d+),\s*Score 2:\s*(\d+)", preference_text)
-    if not match:
-        print("Could not extract valid scores from RLHF output")
-        return None, None
+    # Look for two numbers in the generated text
+    numbers = re.findall(r'\d+', preference_text)
+    if len(numbers) >= 2:
+        try:
+            score1 = float(numbers[0])
+            score2 = float(numbers[1])
+            
+            # Ensure scores are between 0 and 10
+            score1 = max(0, min(10, score1))
+            score2 = max(0, min(10, score2))
+            
+            # Normalize to sum to 1.0
+            total = score1 + score2
+            if total > 0:
+                score1 = score1 / total
+                score2 = score2 / total
+                print(f"Normalized scores: [{score1:.2f}], [{score2:.2f}]")
+                return (response1, response2) if score1 > score2 else (response2, response1)
+        except ValueError:
+            pass
     
-    try:
-        score1 = float(match.group(1))
-        score2 = float(match.group(2))
-        
-        # Ensure scores are between 0 and 10
-        score1 = max(0, min(10, score1))
-        score2 = max(0, min(10, score2))
-        
-        # Normalize to sum to 1.0
-        total = score1 + score2
-        if total > 0:
-            score1 = score1 / total
-            score2 = score2 / total
-            print(f"Extracted scores: [{score1:.2f}], [{score2:.2f}]")
-            return (response1, response2) if score1 > score2 else (response2, response1)
-        else:
-            print("Total score is 0")
-            return None, None
-    except ValueError:
-        print("Invalid score values")
-        return None, None
-    
-    try:
-        score1 = float(match.group(1))
-        score2 = float(match.group(2))
-        
-        total = score1 + score2
-        if total > 0:
-            score1 = score1 / total
-            score2 = score2 / total
-            print(f"Extracted scores: [{score1:.2f}], [{score2:.2f}]")
-            return (response1, response2) if score1 > score2 else (response2, response1)
-    except ValueError:
-        print("Invalid score values extracted")
-        return None, None
-    
+    print("Could not extract valid scores")
     return None, None
 
 def train_dynamic_dpo(base_model, tokenizer, num_iterations):
