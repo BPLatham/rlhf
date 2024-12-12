@@ -197,6 +197,7 @@ Consider:
 
 Respond ONLY with the scores of this format:
 Score 1: 7, Score 2: 3
+!!!! DO NOT RESPOND WITH THIS THESE NUMBERS. USE THE NUMBERS YOU DETERMINE TO BE REPRESENTATIVE OF THE QUALITY AND APPROPRIATENESS OF THE TWO RESPONSES YOU RECIEVED AND ACCORDING TO THE OUTLINED CONSIDERATIONS!!!!! 
 """
     
     inputs = rlhf_tokenizer(preference_prompt, return_tensors="pt", max_length=1024, truncation=True).to("cuda")
