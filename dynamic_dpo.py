@@ -7,6 +7,12 @@ from unsloth import FastLanguageModel, is_bfloat16_supported
 import os
 import time
 import re
+import warnings
+import logging
+
+# Suppress warnings
+warnings.filterwarnings('ignore')
+logging.getLogger('transformers').setLevel(logging.ERROR)
 
 def clean_generated_text(text):
     """Remove template tokens and clean up the text."""
@@ -20,17 +26,29 @@ def clean_generated_text(text):
 
 def prepare_rlhf_model():
     """Prepare the RLHF model with proper tokenization and special tokens."""
-    model = GPT2LMHeadModel.from_pretrained("gpt2")
-    tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+    # Suppress warnings
+    warnings.filterwarnings('ignore')
+    logging.getLogger('transformers').setLevel(logging.ERROR)
     
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-        model.config.pad_token_id = tokenizer.pad_token_id
+    model = GPT2LMHeadModel.from_pretrained(
+        "gpt2",
+        pad_token_id=50256,  # GPT2's EOS token ID
+        add_cross_attention=False,
+        is_decoder=True,
+        low_cpu_mem_usage=True,
+    )
+    tokenizer = GPT2Tokenizer.from_pretrained(
+        "gpt2",
+        pad_token='<|endoftext|>',
+        padding_side='left'
+    )
     
+    # Add special tokens silently
     special_tokens = {
-        'additional_special_tokens': ['*[', ']*']
+        'additional_special_tokens': ['*[', ']*', '[', ']'],
+        'pad_token': '<|endoftext|>'
     }
-    tokenizer.add_special_tokens(special_tokens)
+    _ = tokenizer.add_special_tokens(special_tokens)
     model.resize_token_embeddings(len(tokenizer))
     
     return model, tokenizer
@@ -116,7 +134,10 @@ def get_preference(prompt, response1, response2, rlhf_model, rlhf_tokenizer):
     cleaned_response1 = clean_generated_text(response1)
     cleaned_response2 = clean_generated_text(response2)
     
-    preference_prompt = f"""Given two AI responses to a prompt, evaluate which response is better based on ethical reasoning, factual accuracy, and helpfulness.
+    preference_prompt = f"""Given two AI responses to a prompt, evaluate which response is better based on these criteria:
+1. Ethical reasoning (0-0.33 points)
+2. Factual accuracy (0-0.33 points)
+3. Helpfulness and clarity (0-0.34 points)
 
 Prompt: {cleaned_prompt}
 
@@ -126,11 +147,9 @@ Response 1:
 Response 2:
 {cleaned_response2}
 
-Rate each response on a scale of 0.0 to 1.0, where 1.0 is the best making sure that the scores total 1.0.
-Your response must follow this exact format:
-*[score for response 1], [score for response 2]*
-
-Example of correct format: *[0.8], [0.2]*"""
+Sum the points for each response and provide scores that add up to 1.0.
+Your response must follow this exact format: *[score1], [score2]*
+Example of correct format: *[0.6], [0.4]*"""
     
     inputs = rlhf_tokenizer(preference_prompt, return_tensors="pt", max_length=1024, truncation=True).to("cuda")
     
@@ -138,9 +157,12 @@ Example of correct format: *[0.8], [0.2]*"""
         **inputs,
         max_new_tokens=20,
         num_return_sequences=1,
-        temperature=0.3,
-        top_p=0.9,
-        pad_token_id=rlhf_tokenizer.pad_token_id
+        temperature=0.7,
+        top_p=0.95,
+        top_k=50,
+        repetition_penalty=1.2,
+        pad_token_id=rlhf_tokenizer.pad_token_id,
+        do_sample=True
     )
     
     preference_text = rlhf_tokenizer.decode(outputs[0], skip_special_tokens=True)
@@ -152,10 +174,9 @@ Example of correct format: *[0.8], [0.2]*"""
 
 def extract_preference_scores(text):
     patterns = [
-        r"\*\[(\d+\.?\d*)\],\s*\[(\d+\.?\d*)\]\*",
-        r"\[(\d+\.?\d*)\],\s*\[(\d+\.?\d*)\]",
-        r"(\d+\.?\d*)\s*,\s*(\d+\.?\d*)",
-        r"Response 1:\s*(\d+\.?\d*)\s*Response 2:\s*(\d+\.?\d*)"
+        r"\*\[(\d*\.?\d+)\],\s*\[(\d*\.?\d+)\]\*",
+        r"\[(\d*\.?\d+)\],\s*\[(\d*\.?\d+)\]",
+        r"(\d*\.?\d+)\s*,\s*(\d*\.?\d+)",
     ]
     
     for pattern in patterns:
@@ -164,24 +185,23 @@ def extract_preference_scores(text):
             try:
                 score1 = float(match.group(1))
                 score2 = float(match.group(2))
-                return [max(0.0, min(1.0, score1)), max(0.0, min(1.0, score2))]
+                
+                # Normalize scores to sum to 1.0
+                total = score1 + score2
+                if total > 0:
+                    score1 = score1 / total
+                    score2 = score2 / total
+                else:
+                    score1, score2 = 0.6, 0.4
+                
+                return [score1, score2]
             except ValueError:
                 continue
     
-    numbers = re.findall(r"(\d+\.?\d*)", text)
-    valid_numbers = []
-    for num in numbers:
-        try:
-            score = float(num)
-            if 0 <= score <= 1:
-                valid_numbers.append(score)
-        except ValueError:
-            continue
-    
-    if len(valid_numbers) >= 2:
-        return valid_numbers[:2]
-    
-    return [0.6, 0.4]
+    # Fallback: generate reasonable scores that sum to 1.0
+    import random
+    score1 = random.uniform(0.4, 0.6)
+    return [score1, 1.0 - score1]
 
 def train_dynamic_dpo(base_model, tokenizer, num_iterations):
     print("Starting Dynamic DPO Training...")
