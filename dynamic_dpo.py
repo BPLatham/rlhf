@@ -38,9 +38,11 @@ def prepare_reward_model():
     
     model = AutoModelForSequenceClassification.from_pretrained(
         "OpenAssistant/reward-model-deberta-v3-large-v2",
-        device_map="auto",
         torch_dtype=torch.bfloat16 if is_bfloat16_supported() else torch.float16
     )
+    # Manually move model to CUDA
+    model = model.to("cuda")
+    
     tokenizer = AutoTokenizer.from_pretrained("OpenAssistant/reward-model-deberta-v3-large-v2")
     return model, tokenizer
 
