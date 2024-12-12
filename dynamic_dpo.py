@@ -163,7 +163,7 @@ def train_dynamic_dpo(base_model, tokenizer, num_iterations=50):
         position_ids.masked_fill_(attention_mask == 0, 0)
         inputs["position_ids"] = position_ids
         
-        outputs = rlhf_model.generate(**inputs, max_new_tokens=50, num_return_sequences=1)
+        outputs = rlhf_model.generate(**inputs, max_new_tokens=10, num_return_sequences=1)
         
         preference_text = rlhf_tokenizer.decode(outputs[0], skip_special_tokens=True)
         preference_scores = extract_preference_scores(preference_text)
@@ -181,8 +181,12 @@ def train_dynamic_dpo(base_model, tokenizer, num_iterations=50):
             return [score1, score2]
         else:
             print(f"Warning: Unable to extract preference scores from the generated text: {text}")
-            return [0.5, 0.5]  # Return default scores if not found
-
+            # Try to extract any floating-point numbers as a fallback
+            scores = re.findall(r"(\d\.\d+)", text)
+            if len(scores) >= 2:
+                return [float(score) for score in scores[:2]]
+            else:
+                return [0.5, 0.5]  # Return default scores if not found
     preference_data = []
     print(f"\nStarting dynamic preference collection for {num_iterations} iterations...")
     
