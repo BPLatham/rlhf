@@ -8,6 +8,33 @@ import os
 import time
 import re
 
+def clean_generated_text(text):
+    """Remove template tokens and clean up the text."""
+    # Remove template tokens
+    cleaned = re.sub(r'<\|im_start\|>(?:user|assistant|system)', '', text)
+    # Remove redundant newlines
+    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+    # Remove leading/trailing whitespace
+    cleaned = cleaned.strip()
+    return cleaned
+
+def prepare_rlhf_model():
+    """Prepare the RLHF model with proper tokenization and special tokens."""
+    model = GPT2LMHeadModel.from_pretrained("gpt2")
+    tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+    
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+        model.config.pad_token_id = tokenizer.pad_token_id
+    
+    special_tokens = {
+        'additional_special_tokens': ['*[', ']*']
+    }
+    tokenizer.add_special_tokens(special_tokens)
+    model.resize_token_embeddings(len(tokenizer))
+    
+    return model, tokenizer
+
 def train_sft():
     print("Starting SFT Training...")
     max_seq_length = 2048
@@ -34,7 +61,6 @@ def train_sft():
         chat_template="chatml",
     )
     
-    # Set pad token to avoid attention mask issues
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
         model.config.pad_token_id = tokenizer.pad_token_id
@@ -84,16 +110,88 @@ class CustomDPOTrainer(DPOTrainer):
             logs["time"] = time.time() - start_time
         super().log(logs)
 
+def get_preference(prompt, response1, response2, rlhf_model, rlhf_tokenizer):
+    # Clean the responses
+    cleaned_prompt = clean_generated_text(prompt)
+    cleaned_response1 = clean_generated_text(response1)
+    cleaned_response2 = clean_generated_text(response2)
+    
+    preference_prompt = f"""Given two AI responses to a prompt, evaluate which response is better based on ethical reasoning, factual accuracy, and helpfulness.
+
+Prompt: {cleaned_prompt}
+
+Response 1:
+{cleaned_response1}
+
+Response 2:
+{cleaned_response2}
+
+Rate each response on a scale of 0.0 to 1.0, where 1.0 is the best.
+Your response must follow this exact format:
+*[score for response 1], [score for response 2]*
+
+Example of correct format: *[0.8], [0.6]*"""
+    
+    inputs = rlhf_tokenizer(preference_prompt, return_tensors="pt", max_length=1024, truncation=True).to("cuda")
+    
+    outputs = rlhf_model.generate(
+        **inputs,
+        max_new_tokens=20,
+        num_return_sequences=1,
+        temperature=0.3,
+        top_p=0.9,
+        pad_token_id=rlhf_tokenizer.pad_token_id
+    )
+    
+    preference_text = rlhf_tokenizer.decode(outputs[0], skip_special_tokens=True)
+    preference_scores = extract_preference_scores(preference_text)
+    
+    print(f"\nScores: [{preference_scores[0]:.2f}], [{preference_scores[1]:.2f}]")
+    
+    return (response1, response2) if preference_scores[0] > preference_scores[1] else (response2, response1)
+
+def extract_preference_scores(text):
+    patterns = [
+        r"\*\[(\d+\.?\d*)\],\s*\[(\d+\.?\d*)\]\*",
+        r"\[(\d+\.?\d*)\],\s*\[(\d+\.?\d*)\]",
+        r"(\d+\.?\d*)\s*,\s*(\d+\.?\d*)",
+        r"Response 1:\s*(\d+\.?\d*)\s*Response 2:\s*(\d+\.?\d*)"
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            try:
+                score1 = float(match.group(1))
+                score2 = float(match.group(2))
+                return [max(0.0, min(1.0, score1)), max(0.0, min(1.0, score2))]
+            except ValueError:
+                continue
+    
+    numbers = re.findall(r"(\d+\.?\d*)", text)
+    valid_numbers = []
+    for num in numbers:
+        try:
+            score = float(num)
+            if 0 <= score <= 1:
+                valid_numbers.append(score)
+        except ValueError:
+            continue
+    
+    if len(valid_numbers) >= 2:
+        return valid_numbers[:2]
+    
+    return [0.6, 0.4]
+
 def train_dynamic_dpo(base_model, tokenizer, num_iterations):
     print("Starting Dynamic DPO Training...")
     
-    rlhf_model = GPT2LMHeadModel.from_pretrained("gpt2")
-    rlhf_tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+    rlhf_model, rlhf_tokenizer = prepare_rlhf_model()
+    rlhf_model = rlhf_model.to("cuda")
     
     def generate_prompt():
         inference_model = FastLanguageModel.for_inference(base_model)
-        
-        prompt_request = "I am querying you as part of a feedback loop for training another AI on human ethical concerns. Generate a question for this AI to answer and output only this question with no other words so you don't break the feedback loop."
+        prompt_request = "Generate an ethical dilemma or philosophical question that challenges AI decision-making."
         messages = [{"from": "human", "value": prompt_request}]
         inputs = tokenizer.apply_chat_template(
             messages,
@@ -102,26 +200,21 @@ def train_dynamic_dpo(base_model, tokenizer, num_iterations):
             return_tensors="pt"
         ).to("cuda")
         
-        attention_mask = torch.ones_like(inputs).to("cuda")
-        
         outputs = inference_model.generate(
             input_ids=inputs,
-            attention_mask=attention_mask,
+            attention_mask=torch.ones_like(inputs).to("cuda"),
             max_new_tokens=64,
             temperature=0.9,
             top_p=0.6,
             do_sample=True,
             pad_token_id=tokenizer.pad_token_id,
-            use_cache=True
         )
         
         generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
-        prompt = generated_text.split(tokenizer.eos_token)[0].strip()
-        return prompt
+        return clean_generated_text(generated_text)
 
     def generate_responses(prompt):
         inference_model = FastLanguageModel.for_inference(base_model)
-        
         messages = [{"from": "human", "value": prompt}]
         inputs = tokenizer.apply_chat_template(
             messages,
@@ -130,63 +223,26 @@ def train_dynamic_dpo(base_model, tokenizer, num_iterations):
             return_tensors="pt"
         ).to("cuda")
         
-        attention_mask = torch.ones_like(inputs).to("cuda")
-        
         responses = []
         configs = [
-            {'temperature': 0.6, 'top_p': 0.6, 'top_k': 50, 'repetition_penalty': 1.2},
-            {'temperature': 1.2, 'top_p': 0.4, 'top_k': 20, 'repetition_penalty': 1.5}
+            {'temperature': 0.6, 'top_p': 0.6},
+            {'temperature': 1.2, 'top_p': 0.4}
         ]
         
         for config in configs:
             outputs = inference_model.generate(
                 input_ids=inputs,
-                attention_mask=attention_mask,
+                attention_mask=torch.ones_like(inputs).to("cuda"),
                 max_new_tokens=100,
                 do_sample=True,
                 pad_token_id=tokenizer.pad_token_id,
-                use_cache=True,
                 **config
             )
             generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
-            response = generated_text.split(tokenizer.eos_token)[0].strip()
-            responses.append(response)
+            responses.append(clean_generated_text(generated_text))
         
         return responses
 
-    def get_preference(prompt, response1, response2, rlhf_model, rlhf_tokenizer):
-        preference_prompt = f"Prompt: {prompt}\nResponse 1: {response1}\nResponse 2: {response2}\n\nWhich response is better? Provide a preference score between 0 and 1 for each response in the exact format *[score for response 1], [score for response 2]*."
-        
-        inputs = rlhf_tokenizer(preference_prompt, return_tensors="pt", max_length=1024, truncation=True)
-        attention_mask = inputs["attention_mask"]
-        position_ids = attention_mask.cumsum(dim=1) - 1
-        position_ids.masked_fill_(attention_mask == 0, 0)
-        inputs["position_ids"] = position_ids
-        
-        outputs = rlhf_model.generate(**inputs, max_new_tokens=10, num_return_sequences=1)
-        
-        preference_text = rlhf_tokenizer.decode(outputs[0], skip_special_tokens=True)
-        preference_scores = extract_preference_scores(preference_text)
-        
-        if preference_scores[0] > preference_scores[1]:
-            return response1, response2
-        else:
-            return response2, response1
-
-    def extract_preference_scores(text):
-        match = re.search(r"\*\[(\d\.\d+)\],\s*\[(\d\.\d+)\]\*", text)
-        if match:
-            score1 = float(match.group(1))
-            score2 = float(match.group(2))
-            return [score1, score2]
-        else:
-            print(f"Warning: Unable to extract preference scores from the generated text: {text}")
-            # Try to extract any floating-point numbers as a fallback
-            scores = re.findall(r"(\d\.\d+)", text)
-            if len(scores) >= 2:
-                return [float(score) for score in scores[:2]]
-            else:
-                return [0.5, 0.5]  # Return default scores if not found
     preference_data = []
     print(f"\nStarting dynamic preference collection for {num_iterations} iterations...")
     
@@ -194,14 +250,8 @@ def train_dynamic_dpo(base_model, tokenizer, num_iterations):
         print(f"\nIteration {iteration + 1}/{num_iterations}")
         
         prompt = generate_prompt()
-        # print(f"\nGenerated prompt: {prompt}")
-        
         responses = generate_responses(prompt)
-        # print(f"\nResponse 1: {responses[0]}")
-        # print(f"\nResponse 2: {responses[1]}")
-        
         chosen, rejected = get_preference(prompt, responses[0], responses[1], rlhf_model, rlhf_tokenizer)
-        # print(f"\nChosen response: {chosen}")
         
         preference_data.append({
             "prompt": prompt,
@@ -248,9 +298,7 @@ def test_model(model, tokenizer, prompts):
     responses = []
     for prompt in prompts:
         model = FastLanguageModel.for_inference(model)
-        test_messages = [
-            {"from": "human", "value": prompt},
-        ]
+        test_messages = [{"from": "human", "value": prompt}]
         inputs = tokenizer.apply_chat_template(
             test_messages,
             tokenize=True,
@@ -258,19 +306,16 @@ def test_model(model, tokenizer, prompts):
             return_tensors="pt",
         ).to("cuda")
         
-        attention_mask = torch.ones_like(inputs).to("cuda")
-        
         output = model.generate(
             input_ids=inputs,
-            attention_mask=attention_mask,
+            attention_mask=torch.ones_like(inputs).to("cuda"),
             max_new_tokens=128,
             temperature=0.7,
             top_p=0.9,
             do_sample=True,
             pad_token_id=tokenizer.pad_token_id,
-            use_cache=True
         )
-        response = tokenizer.decode(output[0], skip_special_tokens=True)
+        response = clean_generated_text(tokenizer.decode(output[0], skip_special_tokens=True))
         responses.append(response)
     return responses
 
@@ -282,22 +327,12 @@ def generate_test_prompts():
     ]
 
 if __name__ == "__main__":
-    # Generate test prompts
     test_prompts = generate_test_prompts()
-
-    # First run SFT
     sft_model, tokenizer = train_sft()
-
-    # Test the model before DPO feedback loop
     responses_before_dpo = test_model(sft_model, tokenizer, test_prompts)
-
-    # Run dynamic DPO with 50 iterations
     final_model = train_dynamic_dpo(sft_model, tokenizer, num_iterations=100)
-
-    # Test the model after DPO feedback loop
     responses_after_dpo = test_model(final_model, tokenizer, test_prompts)
 
-    # Save the responses before and after DPO feedback loop to a file
     with open("test_results.txt", "w") as file:
         file.write("Responses before DPO feedback loop:\n")
         for prompt, response in zip(test_prompts, responses_before_dpo):
