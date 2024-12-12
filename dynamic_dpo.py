@@ -84,7 +84,7 @@ class CustomDPOTrainer(DPOTrainer):
             logs["time"] = time.time() - start_time
         super().log(logs)
 
-def train_dynamic_dpo(base_model, tokenizer, num_iterations=50):
+def train_dynamic_dpo(base_model, tokenizer, num_iterations):
     print("Starting Dynamic DPO Training...")
     
     rlhf_model = GPT2LMHeadModel.from_pretrained("gpt2")
@@ -142,7 +142,7 @@ def train_dynamic_dpo(base_model, tokenizer, num_iterations=50):
             outputs = inference_model.generate(
                 input_ids=inputs,
                 attention_mask=attention_mask,
-                max_new_tokens=256,
+                max_new_tokens=100,
                 do_sample=True,
                 pad_token_id=tokenizer.pad_token_id,
                 use_cache=True,
