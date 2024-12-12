@@ -155,7 +155,7 @@ def train_dynamic_dpo(base_model, tokenizer, num_iterations=50):
         return responses
 
     def get_preference(prompt, response1, response2, rlhf_model, rlhf_tokenizer):
-        preference_prompt = f"Prompt: {prompt}\nResponse 1: {response1}\nResponse 2: {response2}\n\nWhich response is better? Provide a preference score between 0 and 1 for each response."
+        preference_prompt = f"Prompt: {prompt}\nResponse 1: {response1}\nResponse 2: {response2}\n\nWhich response is better? Provide a preference score between 0 and 1 for each response in the exact format *[score for response 1], [score for response 2]*."
         
         inputs = rlhf_tokenizer(preference_prompt, return_tensors="pt", max_length=1024, truncation=True)
         attention_mask = inputs["attention_mask"]
