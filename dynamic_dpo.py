@@ -286,7 +286,7 @@ if __name__ == "__main__":
     responses_before_dpo = test_model(sft_model, tokenizer, test_prompts)
 
     # Run dynamic DPO with 50 iterations
-    final_model = train_dynamic_dpo(sft_model, tokenizer, num_iterations=50)
+    final_model = train_dynamic_dpo(sft_model, tokenizer, num_iterations=100)
 
     # Test the model after DPO feedback loop
     responses_after_dpo = test_model(final_model, tokenizer, test_prompts)
